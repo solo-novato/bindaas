@@ -39,11 +39,14 @@ Status as of September 28, 2026. Decisions made: **Bindaas** (name), **MIT** (li
 - [x] GitHub owner `solo-novato`; all repository links point to `solo-novato/bindaas`.
 - [x] Repository created from this folder only (not the parent folder, which holds personal data). Commits use the GitHub noreply address.
 - [x] **Private vulnerability reporting** enabled (`SECURITY.md` relies on it).
-- [ ] Push, confirm CI is green on GitHub's macOS runners, then tag `v0.1.0` and publish the draft release after a smoke test.
+- [x] Pushed; CI is green on GitHub's macOS runners (Chromium and WebKit).
+- [x] Tagged `v0.1.0`; the Release workflow built the DMG into a **draft** release.
+- [ ] Publish the draft release after the smoke test below.
 - [ ] Smoke-test the release DMG on a clean macOS user account with an npm-installed Codex: install, run the Gatekeeper step, go through setup, and run one task.
 
 ## Later
 
+- [ ] Review the first Dependabot PRs (#1–#6). npm and Cargo bumps need `npm run notices` committed on the branch, or CI's notices check fails.
 - [ ] Notarize releases (Apple Developer account) to remove the Gatekeeper step.
 - [ ] Move the conversation state machine out of `App.svelte` into a store (see `docs/architecture/FRONTEND.md`).
 - [ ] Auto-update (opt-in, since it adds a network request).
