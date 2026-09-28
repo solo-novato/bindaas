@@ -1,0 +1,139 @@
+/* Design tokens: color, type, radius, elevation, motion curves; dark and light themes. */
+
+:root {
+  /* Type: one compact scale; nothing below 11px. */
+  --font-sans:
+    'Inter Variable', 'Inter', 'SF Pro Text', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  --mono:
+    'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo,
+    Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --topbar-height: 48px;
+  --bar-height: 44px;
+  --reading-width: 820px;
+  /* Graphite surfaces, electric indigo for interaction; status colors stay separate. */
+  --bg: #111215;
+  --panel: #0c0d10;
+  --surface: #17191d;
+  --raised: #1d2025;
+  --editor: #0e0f12;
+  --text: #eceef2;
+  --muted: #969ca8;
+  --border: #26292f;
+  --hover: #22252b;
+  --accent: #8b95ff;
+  --accent-text: #0c0e24;
+  --green: #5fd39a;
+  --red: #ff7a85;
+  --amber: #f0b64a;
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, var(--border));
+  --line-soft: color-mix(in srgb, var(--border) 70%, transparent);
+  --border-strong: color-mix(in srgb, var(--muted) 30%, var(--border));
+  --shadow-soft: 0 1px 2px #0000004d, 0 4px 14px #00000026;
+  --shadow-pop: 0 1px 0 #ffffff0a inset, 0 18px 50px #0000008c;
+  --highlight: inset 0 1px 0 #ffffff0d;
+  --accent-2: #c792ff;
+  --accent-gradient: linear-gradient(
+    135deg,
+    var(--accent) 0%,
+    color-mix(in srgb, var(--accent) 45%, var(--accent-2)) 100%
+  );
+  --aurora-a: color-mix(in srgb, var(--accent) 13%, transparent);
+  --aurora-b: color-mix(in srgb, var(--accent-2) 9%, transparent);
+  --glass-surface: color-mix(in srgb, var(--raised) 80%, transparent);
+  --glass-blur: blur(18px) saturate(1.5);
+  --grain-opacity: 0.045;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: linear(
+    0,
+    0.063,
+    0.221 7.2%,
+    0.468 12.3%,
+    0.826 20.2%,
+    0.959 24.2%,
+    1.043 28.7%,
+    1.078 32.7%,
+    1.083 35.3%,
+    1.073 38.7%,
+    1.021 48%,
+    1.001 54.9%,
+    0.992 62.2%,
+    0.999 81.6%,
+    1
+  );
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-size: var(--fs-base);
+  color-scheme: dark;
+}
+
+:root[data-appearance='light'] {
+  --bg: #fbfbfc;
+  --panel: #f3f4f6;
+  --surface: #ffffff;
+  --raised: #ffffff;
+  --editor: #ffffff;
+  --text: #16181d;
+  --muted: #5b616d;
+  --border: #e2e4e9;
+  --hover: #eceef2;
+  --accent: #4a55d6;
+  --accent-text: #ffffff;
+  --green: #136b3f;
+  --red: #b3283a;
+  --amber: #8f5a00;
+  --shadow-soft: 0 1px 2px #1018280d, 0 4px 12px #1018280a;
+  --shadow-pop: 0 20px 50px #10182833, 0 2px 6px #1018281a;
+  --highlight: none;
+  --accent-2: #8b3fd9;
+  --aurora-a: color-mix(in srgb, var(--accent) 7%, transparent);
+  --aurora-b: color-mix(in srgb, var(--accent-2) 5%, transparent);
+  --grain-opacity: 0.03;
+  color: var(--text);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-appearance='system'] {
+    --bg: #fbfbfc;
+    --panel: #f3f4f6;
+    --surface: #ffffff;
+    --raised: #ffffff;
+    --editor: #ffffff;
+    --text: #16181d;
+    --muted: #5b616d;
+    --border: #e2e4e9;
+    --hover: #eceef2;
+    --accent: #4a55d6;
+    --accent-text: #ffffff;
+    --green: #136b3f;
+    --red: #b3283a;
+    --amber: #8f5a00;
+    --shadow-soft: 0 1px 2px #1018280d, 0 4px 12px #1018280a;
+    --shadow-pop: 0 20px 50px #10182833, 0 2px 6px #1018281a;
+    --highlight: none;
+    --accent-2: #8b3fd9;
+    --aurora-a: color-mix(in srgb, var(--accent) 7%, transparent);
+    --aurora-b: color-mix(in srgb, var(--accent-2) 5%, transparent);
+    --grain-opacity: 0.03;
+    color: var(--text);
+    color-scheme: light;
+  }
+}

@@ -1,0 +1,753 @@
+/* App shell: top bar, work area, panes, and surface headers. */
+
+.app-shell {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-width: 1000px;
+  overflow: hidden;
+}
+
+.topbar {
+  height: 66px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding: 0 18px;
+  gap: 12px;
+  background: var(--panel);
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px #ffffff24;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  font-size: 25px;
+}
+
+.project-button {
+  min-width: 164px;
+  max-width: 230px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+}
+
+.project-button strong {
+  font-size: var(--fs-base);
+  letter-spacing: -0.2px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-button span {
+  font-size: var(--fs-xs);
+}
+
+.project-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.topbar nav {
+  display: flex;
+  align-items: center;
+  margin: auto;
+  gap: 3px;
+}
+
+.topbar nav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  color: var(--muted);
+  padding: 8px 11px;
+  position: relative;
+  font-size: var(--fs-sm);
+}
+
+.nav-icon {
+  display: flex;
+  opacity: 0.8;
+}
+
+.topbar nav .active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.topbar nav .active .nav-icon {
+  opacity: 1;
+}
+
+.count {
+  background: var(--hover);
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 4px;
+  font-size: var(--fs-xs);
+}
+
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.agent-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 100%;
+  background: var(--muted);
+}
+
+.agent-status.working i {
+  background: var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.agent-status.attention i {
+  background: var(--amber);
+}
+
+.agent-status.bad i {
+  background: var(--red);
+}
+
+.new-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: var(--border-strong);
+  background: var(--surface);
+  margin-left: 4px;
+  font-size: var(--fs-sm);
+}
+
+.work-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.pane-heading {
+  height: 47px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px 0 18px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.pane-heading > div {
+  display: flex;
+  align-items: center;
+}
+
+.pane-heading button {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  min-height: 28px;
+  font-size: var(--fs-lg);
+  padding: 4px 8px;
+}
+
+.pane-heading b {
+  background: var(--hover);
+  padding: 2px 5px;
+  border-radius: 4px;
+  margin-left: 6px;
+}
+
+.resize-handle {
+  width: 1px;
+  padding: 0;
+  background: var(--border);
+  cursor: col-resize;
+  border-radius: 0;
+  position: relative;
+  flex-shrink: 0;
+  z-index: 3;
+  touch-action: none;
+}
+
+.resize-handle:after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+}
+
+.resize-handle:hover,
+.resize-handle:focus-visible {
+  background: var(--accent);
+}
+
+.resize-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+main {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.surface-heading {
+  height: 47px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.surface-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.project-path {
+  font: var(--fs-xs) var(--mono);
+  color: var(--muted);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1150px) {
+  .right-resize {
+    display: none;
+  }
+  .topbar nav button {
+    padding: 8px 10px;
+  }
+  .project-button {
+    min-width: 140px;
+  }
+  .topbar {
+    gap: 7px;
+  }
+  .new-task {
+    font-size: var(--fs-xs);
+  }
+}
+
+.agent-status.ready i {
+  background: var(--green);
+}
+
+/* Attention is a layout choice, not a separate workspace. */
+.launch-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 146px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--muted);
+  text-align: left;
+  background: var(--bg);
+}
+
+.launch-trigger > span:first-child {
+  font-size: 19px;
+  line-height: 14px;
+}
+
+.launch-trigger > span:nth-child(2) {
+  font-size: var(--fs-xs);
+}
+
+.launch-trigger kbd {
+  margin-left: auto;
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  opacity: 1;
+}
+
+.launch-trigger:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.focus-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  padding: 5px 8px;
+  border-radius: 7px;
+}
+
+.focus-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+@media (max-width: 1280px) {
+  .topbar {
+    gap: 7px;
+    padding-inline: 12px;
+  }
+  .topbar nav {
+    gap: 0;
+  }
+  .topbar .nav-icon {
+    display: none;
+  }
+  .topbar nav button {
+    padding-inline: 11px;
+  }
+  .project-button {
+    min-width: 140px;
+    max-width: 180px;
+  }
+  .project-button strong {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .launch-trigger {
+    min-width: 0;
+    gap: 6px;
+  }
+  .launch-trigger > span:nth-child(2) {
+    display: none;
+  }
+}
+
+/* The composer belongs to the conversation, while task navigation stays global. */
+.topbar .task-switcher {
+  height: auto;
+  margin: 0;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.topbar .task-switcher button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.task-running-count {
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--text);
+  padding: 1px 5px;
+}
+
+.topbar .task-switcher .task-attention {
+  color: var(--amber);
+  border: 1px solid var(--border);
+}
+
+.task-attention > span:first-child {
+  font-weight: 700;
+}
+
+@media (max-width: 1150px) {
+  .topbar .project-button {
+    min-width: 100px;
+    max-width: 130px;
+  }
+  .topbar nav[aria-label='Primary navigation'] button {
+    padding-inline: 8px;
+  }
+  .topbar .task-attention > span:last-child {
+    display: none;
+  }
+  .launch-trigger kbd {
+    display: none;
+  }
+  .topbar .new-task {
+    padding-inline: 8px;
+  }
+}
+
+/* Top bar */
+.topbar {
+  height: var(--topbar-height);
+  padding: 0 10px 0 12px;
+  gap: 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: linear-gradient(
+    135deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 55%, #d46cff)
+  );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--highlight);
+}
+
+.brand-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.topbar .project-button {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 300px;
+  padding: 5px 8px;
+}
+
+.project-button strong {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 170px;
+}
+
+.project-button .project-subtitle {
+  font-size: var(--fs-xs);
+  gap: 4px;
+  min-width: 0;
+}
+
+.topbar nav[aria-label='Primary navigation'] {
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.topbar nav[aria-label='Primary navigation'] button {
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--muted);
+}
+
+.topbar nav[aria-label='Primary navigation'] button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.topbar nav[aria-label='Primary navigation'] .active {
+  color: var(--text);
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--border),
+    var(--highlight);
+}
+
+.topbar nav .active .nav-icon {
+  color: var(--accent);
+}
+
+.count {
+  margin-left: 0;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.launch-trigger {
+  height: 30px;
+  min-width: 170px;
+  padding: 0 6px 0 9px;
+  gap: 8px;
+  background: var(--bg);
+  border-radius: var(--r-md);
+}
+
+.launch-trigger > span:nth-child(2) {
+  font-size: var(--fs-sm);
+}
+
+.launch-trigger:hover {
+  border-color: var(--accent-line);
+  background: var(--surface);
+}
+
+.topbar > .agent-status {
+  height: 30px;
+  padding: 0 10px;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.topbar > .agent-status.working {
+  color: var(--text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.topbar > .agent-status.attention {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
+}
+
+.topbar > .agent-status.bad {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.agent-status i {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+
+.agent-status.working i {
+  color: var(--accent);
+  background: var(--accent);
+  animation: glow 1.8s ease-out infinite;
+}
+
+.topbar .task-switcher button {
+  height: 30px;
+  padding: 0 9px;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.topbar .task-switcher button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.topbar .task-switcher button.has-running {
+  color: var(--text);
+}
+
+.task-running-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-running-count i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  color: var(--accent);
+  animation: glow 1.8s ease-out infinite;
+}
+
+.topbar .task-switcher .task-attention {
+  color: var(--amber);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--border));
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+}
+
+.topbar .task-switcher .task-attention:hover:not(:disabled) {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 20%, transparent);
+}
+
+.topbar .new-task {
+  height: 30px;
+  padding: 0 12px;
+  margin-left: 2px;
+  gap: 6px;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  box-shadow: var(--highlight);
+}
+
+.topbar .new-task:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, white);
+}
+
+.pane-heading {
+  height: var(--bar-height);
+  padding: 0 8px 0 14px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-heading button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 3px;
+  color: var(--muted);
+}
+
+.pane-heading button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.pane-heading b {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--hover);
+}
+
+.resize-handle {
+  background: var(--border);
+}
+
+/* Main surface headers */
+.surface-heading {
+  height: var(--bar-height);
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.surface-heading > div {
+  gap: 6px;
+}
+
+.surface-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.focus-toggle {
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 1280px) {
+  .launch-trigger {
+    min-width: 0;
+  }
+  .topbar nav[aria-label='Primary navigation'] button {
+    padding-inline: 9px;
+  }
+}
+
+@media (max-width: 1150px) {
+  .topbar .project-button {
+    max-width: 150px;
+  }
+  .project-button .project-subtitle {
+    display: none;
+  }
+}
+
+/* ————————————————————————————————————————————————————————————————
+   Expressive layer. Everything here is presentation; Power saving
+   (data-motion='saving') and macOS Reduce Motion switch it off below.
+   ———————————————————————————————————————————————————————————————— */
+
+/* Ambient surfaces: static paint, no ongoing cost. */
+.app-shell {
+  position: relative;
+}
+
+main {
+  background:
+    radial-gradient(900px 420px at 30% -8%, var(--aurora-a), transparent 70%),
+    radial-gradient(700px 380px at 95% 0%, var(--aurora-b), transparent 72%),
+    var(--bg);
+}
+
+/* macOS window buttons live inside the top bar. */
+.native-titlebar .topbar {
+  padding-left: 84px;
+}
+
+.topbar nav.glide .active,
+.segmented.glide .chosen {
+  background: transparent;
+  box-shadow: none;
+}
+
+.topbar > .agent-status {
+  transition:
+    color 300ms ease,
+    background-color 300ms ease,
+    border-color 300ms ease;
+}
+
+/* Task switcher: rolling count and a ping when something happens elsewhere. */
+.topbar .task-switcher > button:first-child {
+  position: relative;
+}
+
+.resize-handle {
+  transition:
+    background-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.resize-handle:hover {
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+}

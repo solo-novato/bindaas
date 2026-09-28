@@ -1,0 +1,15 @@
+/* Bindaas styles, imported in cascade order. */
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/shell.css';
+@import './styles/explorer.css';
+@import './styles/chat.css';
+@import './styles/composer.css';
+@import './styles/decisions.css';
+@import './styles/review.css';
+@import './styles/files.css';
+@import './styles/history.css';
+@import './styles/settings.css';
+@import './styles/dialogs.css';
+@import './styles/accent.css';
+@import './styles/motion.css';

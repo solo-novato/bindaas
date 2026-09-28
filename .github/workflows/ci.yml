@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend checks
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+
+  rust:
+    name: Rust checks
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # The Tauri context embeds the built frontend.
+      - run: npm ci && npm run build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Third-party notices are up to date
+        run: |
+          npm run notices
+          git diff --exit-code THIRD_PARTY_NOTICES.md
+
+  ui:
+    name: UI journeys (${{ matrix.browser }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install ${{ matrix.browser }}
+      - name: Install axe-core for the accessibility audit
+        run: npm install --prefix "$RUNNER_TEMP/axe" --no-package-lock --ignore-scripts axe-core
+      - run: npm run test:ui
+        env:
+          PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
+          WORKBENCH_AXE_PATH: ${{ runner.temp }}/axe/node_modules/axe-core/axe.min.js
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-${{ matrix.browser }}
+          path: test-results/
+          retention-days: 7

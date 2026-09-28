@@ -1,0 +1,660 @@
+/* Composer: message field, controls, context chips, attachments, queued messages. */
+
+.composer-area {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 16px 24px;
+}
+
+.composer-inner {
+  max-width: 1100px;
+  margin: auto;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.composer-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    var(--shadow-soft);
+}
+
+.composer-inner textarea {
+  display: block;
+  border: none;
+  outline: none !important;
+  box-shadow: none;
+  width: 100%;
+  height: 70px;
+  padding: 18px 18px;
+  background: transparent;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.composer-inner textarea::placeholder {
+  color: var(--muted);
+}
+
+.mode-hint {
+  margin: 0;
+  padding: 0 17px 10px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.composer-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer-controls > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.model-controls > button,
+.model-controls select {
+  font-size: var(--fs-xs);
+}
+
+.model-controls select {
+  max-width: 160px;
+  border: none;
+  background: transparent;
+}
+
+.model-trigger {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 13px;
+  border-radius: 8px;
+}
+
+.context-chips:empty,
+.context-chips[hidden] {
+  display: none;
+}
+
+.context-chips {
+  padding: 10px 12px 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.context-chips > span {
+  border: 1px solid var(--border);
+  background: var(--hover);
+  font: var(--fs-xs) var(--mono);
+  border-radius: 5px;
+  padding: 2px 4px 2px 8px;
+}
+
+.context-chips button {
+  padding: 1px 5px;
+}
+
+.queue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1100px;
+  margin: 8px auto 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.queue > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stop {
+  border: 1px solid var(--border);
+  color: var(--red);
+  font-size: var(--fs-xs);
+}
+
+main > .composer-area[hidden] {
+  display: none;
+}
+
+@media (max-width: 1150px) {
+  .composer-controls .small {
+    display: none;
+  }
+}
+
+.focus-mode .composer-area {
+  border-top-color: transparent;
+  background: var(--bg);
+  padding: 12px 24px 24px;
+}
+
+.focus-mode .composer-inner {
+  max-width: var(--reading-width);
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px #0000000d;
+}
+
+.focus-mode .composer-inner textarea {
+  font-size: var(--fs-md);
+  padding: 18px 20px;
+}
+
+.context-chips .context-label {
+  color: var(--text);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-xs);
+  width: auto;
+  padding: 0 3px;
+}
+
+.composer-inner textarea {
+  resize: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+main > .composer-area {
+  padding: 12px 24px 18px;
+  background: var(--bg);
+  border-top: 0;
+  max-height: 48%;
+  overflow-y: auto;
+}
+
+main > .composer-area .composer-inner {
+  max-width: var(--reading-width);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+main > .composer-area .composer-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    var(--shadow-soft);
+}
+
+.composer-controls .model-controls {
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1 1 auto;
+}
+
+.model-controls .send-button {
+  margin-left: auto;
+}
+
+.composer-controls > div:first-child {
+  flex-wrap: wrap;
+}
+
+.context-chips .attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  max-width: min(300px, 100%);
+  font-family: inherit;
+}
+
+.attachment-icon {
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.attachment-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.attachment-copy strong {
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-copy small {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+main.awaiting-answer > .composer-area {
+  min-height: 160px;
+}
+
+main.awaiting-answer > .timeline-stage {
+  min-height: 40px;
+  overflow: hidden;
+}
+
+main.awaiting-answer .timeline {
+  min-height: 0;
+  padding-block: 12px;
+}
+
+main.awaiting-answer .mode-hint {
+  display: none;
+}
+
+main.awaiting-answer .composer-inner textarea {
+  min-height: 40px;
+  padding-block: 9px;
+}
+
+main > .composer-area {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 1;
+  min-height: 160px;
+  overflow: hidden;
+}
+
+main > .composer-area .composer-inner {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  margin-block: 0;
+}
+
+.composer-inner textarea {
+  flex-shrink: 1;
+  min-height: 70px;
+}
+
+.composer-inner .context-chips {
+  flex-shrink: 0;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.composer-controls,
+.mode-hint,
+.queue {
+  flex-shrink: 0;
+}
+
+.attachment-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+}
+
+.context-chips .attachment-open {
+  padding: 2px;
+}
+
+.attachment-remove {
+  color: var(--muted);
+}
+
+/* Queued input stays visible even when the composer is compressed by questions. */
+main > .composer-area {
+  overflow-y: auto;
+  gap: 10px;
+}
+
+main > .composer-area:has(.queue-card) {
+  min-height: 270px;
+}
+
+.queue-card {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 1100px;
+  margin-inline: auto;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+}
+
+.queue-heading,
+.queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.queue-heading strong {
+  color: var(--text);
+}
+
+.queue-heading span,
+.queue-actions small {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.queue-content {
+  max-height: 90px;
+  overflow: auto;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.queue-content p {
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.queue-chip {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 6px 6px 0 0;
+  padding: 2px 6px;
+  font-size: var(--fs-sm);
+}
+
+.queue-actions small {
+  flex: 1 1 220px;
+}
+
+.queue-error {
+  color: var(--red);
+}
+
+main > .composer-area.compact-queued {
+  min-height: 170px;
+  max-height: 210px;
+}
+
+main > .composer-area .queued-composer-hidden {
+  display: none;
+}
+
+.queue-compose-toggle {
+  align-self: center;
+  font-size: var(--fs-xs);
+  padding: 4px 10px;
+}
+
+@media (max-height: 760px) {
+  main.awaiting-answer:has(.compact-queued) .task-header {
+    padding-block: 8px;
+  }
+  main.awaiting-answer:has(.compact-queued) > .approvals {
+    min-height: 230px;
+  }
+  main.awaiting-answer:has(.compact-queued) > .timeline-stage {
+    min-height: 0;
+  }
+}
+
+.agent-switch-note,
+.shared-workspace-note {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-switch-note button {
+  margin-left: auto;
+  padding: 0 6px;
+  min-height: 24px;
+}
+
+.agent-picker {
+  max-width: 110px;
+  font-weight: 600;
+}
+
+/* The agent selector can wrap: preserve visible Send/Stop beside a pinned question. */
+main.awaiting-answer:has(.agent-picker) > .composer-area {
+  min-height: 198px;
+}
+
+main.awaiting-answer:has(.agent-picker)
+  > .composer-area:has(.shared-workspace-note) {
+  min-height: 225px;
+}
+
+.agent-switch-note,
+.shared-workspace-note {
+  flex-shrink: 0;
+}
+
+/* Composer */
+main > .composer-area {
+  min-height: 108px;
+  padding: 6px 16px 12px;
+  gap: 8px;
+  background: var(--bg);
+}
+
+main > .composer-area .composer-inner {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-soft);
+}
+
+main > .composer-area .composer-inner:focus-within {
+  border-color: var(--accent-line);
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    var(--shadow-soft);
+}
+
+.composer-inner textarea {
+  min-height: 48px;
+  padding: 12px 14px 6px;
+  font-size: var(--fs-md);
+}
+
+.focus-mode .composer-inner textarea {
+  padding: 13px 16px 6px;
+}
+
+.mode-hint {
+  padding: 0 14px 4px;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+}
+
+.composer-controls {
+  gap: 4px;
+  padding: 2px 6px 6px 6px;
+}
+
+.composer-controls > div {
+  gap: 2px;
+}
+
+.context-button,
+.model-controls > button,
+.model-controls select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.context-button:hover:not(:disabled),
+.model-controls > button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.model-controls > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.model-controls .segmented {
+  margin-inline: 2px;
+}
+
+.send-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.send-button {
+  height: 30px;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+}
+
+.stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+.stop-glyph {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.queue-next-button {
+  height: 30px;
+  font-size: var(--fs-xs);
+  border: 1px solid var(--border);
+}
+
+.context-chips > span {
+  border-radius: var(--r-md);
+  background: var(--bg);
+  font-size: var(--fs-xs);
+}
+
+.attachment-icon {
+  font-size: 18px;
+}
+
+.queue-card {
+  padding: 10px 14px;
+  border-color: var(--accent-line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-soft);
+}
+
+.queue-heading span,
+.queue-actions small,
+.queue-chip {
+  font-size: var(--fs-xs);
+}
+
+.queue-actions button:not(.primary) {
+  border: 1px solid var(--border);
+  font-size: var(--fs-xs);
+}
+
+.queue-actions .primary {
+  font-size: var(--fs-xs);
+}
+
+main > .composer-area {
+  background: transparent;
+}
+
+.mode-toggle.glide::before {
+  border-radius: var(--r-sm);
+}
+
+.composer-inner[data-mode='plan'] .mode-toggle.glide::before {
+  background: color-mix(in srgb, var(--accent-2) 22%, var(--raised));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-2) 45%, var(--border));
+}
+
+/* Composer: the mode is felt through its glow. */
+main > .composer-area .composer-inner {
+  --mode-glow: var(--accent);
+}
+
+main > .composer-area .composer-inner[data-mode='plan'] {
+  --mode-glow: var(--accent-2);
+}
+
+main > .composer-area .composer-inner:focus-within {
+  border-color: color-mix(in srgb, var(--mode-glow) 55%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--mode-glow) 14%, transparent),
+    0 10px 30px color-mix(in srgb, var(--mode-glow) 10%, transparent),
+    var(--shadow-soft);
+}
+
+main > .composer-area .composer-inner {
+  transition:
+    border-color 260ms ease,
+    box-shadow 320ms ease;
+}
+
+.mode-hint {
+  color: color-mix(in srgb, var(--accent-2) 70%, var(--text));
+  animation: rise-in 280ms var(--ease-out);
+}
+
+.context-chips > span {
+  animation: pop-in 300ms var(--ease-spring);
+}
+
+.queue-card {
+  animation: rise-in 360ms var(--ease-spring);
+}

@@ -1,0 +1,42 @@
+[package]
+name = "bindaas"
+version = "0.1.0"
+edition = "2021"
+description = "A calm desktop workbench for Codex and Claude Code (unofficial, macOS)."
+license = "MIT"
+repository = "https://github.com/solo-novato/bindaas"
+
+[lib]
+name = "bindaas"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22.1"
+tempfile = "3"
+rfd = "0.15"
+open = "5"
+url = "2"
+libc = "0.2"
+tauri-plugin-notification = "2"
+trash = "5"
+
+[dev-dependencies]
+
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false

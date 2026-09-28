@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bindaas",
+  "version": "0.1.0",
+  "identifier": "dev.bindaas.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Bindaas",
+        "width": 1440,
+        "height": 940,
+        "minWidth": 1000,
+        "minHeight": 650,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 18
+        }
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "publisher": "The Bindaas contributors",
+    "copyright": "Copyright \u00a9 2026 The Bindaas contributors. MIT License.",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/solo-novato/bindaas",
+    "shortDescription": "A calm desktop workbench for Codex and Claude Code.",
+    "longDescription": "Bindaas is an unofficial, open-source macOS app for working with coding agents. It drives your own installed Codex CLI (and optionally Claude Code): follow live activity, answer questions and approvals, review changes, and browse or edit project files. Not affiliated with OpenAI or Anthropic.",
+    "resources": {
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../LICENSE": "LICENSE"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.1",
+      "signingIdentity": "-"
+    }
+  }
+}

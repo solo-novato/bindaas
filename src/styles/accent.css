@@ -1,0 +1,26 @@
+/* Accent identity: the gradient on primary actions and brand marks. Loaded after
+   the area styles so it wins over their base backgrounds. */
+
+.primary,
+.topbar .new-task,
+.brand-mark,
+.welcome-icon {
+  background: var(--accent-gradient);
+}
+
+.primary:hover:not(:disabled),
+.topbar .new-task:hover:not(:disabled) {
+  background: var(--accent-gradient);
+  filter: brightness(1.1) saturate(1.05);
+}
+
+.primary:disabled {
+  background: var(--hover);
+}
+
+.primary:not(:disabled),
+.topbar .new-task {
+  box-shadow:
+    var(--highlight),
+    0 4px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}

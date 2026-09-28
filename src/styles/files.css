@@ -1,0 +1,198 @@
+/* File workspace, editor chrome, and Markdown rendering. */
+
+.file-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-tabs {
+  display: flex;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.file-tabs > div {
+  display: flex;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.file-tabs > div.chosen {
+  background: var(--surface);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.file-tabs button {
+  font-size: var(--fs-xs);
+  border-radius: 0;
+  padding: 11px 9px;
+}
+
+.file-tabs button + button {
+  padding-left: 0;
+}
+
+.file-toolbar {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+}
+
+.file-toolbar > .truncate {
+  flex: 1;
+}
+
+.file-toolbar button {
+  font-size: var(--fs-xs);
+}
+
+.file-content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-content.split > * {
+  width: 50%;
+  flex: 1;
+}
+
+.editor-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.code-host {
+  height: 100%;
+}
+
+.selection-action {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px #0004;
+  font-size: var(--fs-xs);
+}
+
+.file-status {
+  border-top: 1px solid var(--border);
+  padding: 7px 15px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  display: flex;
+  justify-content: space-between;
+}
+
+.markdown {
+  overflow: auto;
+  padding: 25px 30px;
+  line-height: 1.8;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown h1 {
+  font-size: 28px;
+  margin-bottom: 20px;
+}
+
+.markdown h2 {
+  margin-top: 28px;
+}
+
+.markdown pre {
+  padding: 15px;
+  background: var(--hover);
+  border-radius: 6px;
+  white-space: pre;
+  overflow: auto;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow: auto;
+}
+
+.markdown td,
+.markdown th {
+  border: 1px solid var(--border);
+  padding: 8px;
+}
+
+.markdown blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 15px;
+  color: var(--muted);
+}
+
+.markdown code {
+  background: var(--hover);
+  padding: 2px 4px;
+}
+
+.empty {
+  margin: auto;
+  text-align: center;
+  padding: 45px 30px;
+  color: var(--muted);
+}
+
+.empty h2 {
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+
+.empty p {
+  font-size: var(--fs-sm);
+}
+
+.empty-symbol {
+  font-size: 45px;
+  opacity: 0.4;
+  margin-bottom: 20px;
+}
+
+.compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: auto;
+  padding: 20px;
+  gap: 20px;
+}
+
+.compare > div {
+  min-width: 0;
+}
+
+.compare pre {
+  max-height: 500px;
+}
+
+.markdown .code-block pre {
+  margin: 0;
+  border-radius: 0;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown pre {
+  background: var(--editor);
+}
