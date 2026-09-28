@@ -36,9 +36,9 @@ Status as of September 28, 2026. Decisions made: **Bindaas** (name), **MIT** (li
 
 ## Before the first public release
 
-- [ ] Pick the GitHub owner/org and replace `OWNER` (README, `docs/INSTALL.md`, `package.json`, `Cargo.toml`, `tauri.conf.json`, `.github/ISSUE_TEMPLATE/config.yml`).
-- [ ] Create the repository from this folder only (`git init` here). Do **not** include the parent folder: it holds personal data and an old zip.
-- [ ] Enable **private vulnerability reporting** in the repository settings (`SECURITY.md` relies on it).
+- [x] GitHub owner `solo-novato`; all repository links point to `solo-novato/bindaas`.
+- [x] Repository created from this folder only (not the parent folder, which holds personal data). Commits use the GitHub noreply address.
+- [x] **Private vulnerability reporting** enabled (`SECURITY.md` relies on it).
 - [ ] Push, confirm CI is green on GitHub's macOS runners, then tag `v0.1.0` and publish the draft release after a smoke test.
 - [ ] Smoke-test the release DMG on a clean macOS user account with an npm-installed Codex: install, run the Gatekeeper step, go through setup, and run one task.
 

@@ -298,10 +298,11 @@ test('pane dividers resize from the keyboard and pointer while preserving readab
   );
   expect(saved.at(-1).args.value.paneSizes).toEqual({ left: 380, right: 578 });
   await page.setViewportSize({ width: 1151, height: 800 });
+  // Pane limits follow the window's resize event; wait for it before measuring.
+  await expect(right).toHaveAttribute('aria-valuenow', '300');
   expect(
     (await page.locator('main').boundingBox())!.width,
   ).toBeGreaterThanOrEqual(480);
-  await expect(right).toHaveAttribute('aria-valuenow', '300');
   expect(
     await page.evaluate(
       () =>
