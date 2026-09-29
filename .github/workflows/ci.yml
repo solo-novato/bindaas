@@ -74,7 +74,7 @@ jobs:
         env:
           PLAYWRIGHT_BROWSER: ${{ matrix.browser }}
           WORKBENCH_AXE_PATH: ${{ runner.temp }}/axe/node_modules/axe-core/axe.min.js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-${{ matrix.browser }}
