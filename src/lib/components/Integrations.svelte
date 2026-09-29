@@ -56,7 +56,7 @@
       <p class="muted small">
         {settings.claudeEnabled
           ? 'Connected · Available for new conversations'
-          : 'Add Claude alongside Codex, using your installed CLI.'}
+          : 'Use Claude Code as well as, or instead of, Codex.'}
       </p>
     </div>
     <button disabled={connecting} onclick={connect}

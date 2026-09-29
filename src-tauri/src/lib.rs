@@ -8,6 +8,7 @@ pub mod git;
 pub mod notifications;
 pub mod settings;
 pub mod shell_env;
+pub mod windows;
 use std::{
     path::PathBuf,
     sync::{
@@ -15,12 +16,13 @@ use std::{
         Arc,
     },
 };
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::Mutex;
 
 pub struct AppState {
     pub attachments: Arc<std::sync::Mutex<attachments::Store>>,
-    pub project: Mutex<Option<PathBuf>>,
+    /// Which project each window shows, and where each conversation belongs.
+    pub windows: Arc<windows::Windows>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: PathBuf,
     pub agents: agents::Registry,
@@ -36,6 +38,8 @@ pub fn run() {
             shell_env::warm();
             let notices = Arc::new(notifications::Notifications::default());
             let event_notices = notices.clone();
+            let registry = Arc::new(windows::Windows::default());
+            let router = registry.clone();
             let handle = app.handle().clone();
             let sink: codex::Sink = Arc::new(move |name, payload| {
                 if let Some((title, body)) =
@@ -49,7 +53,7 @@ pub fn run() {
                         .body(body)
                         .show();
                 }
-                let _ = handle.emit(name, payload);
+                windows::deliver(&handle, &router, name, payload);
             });
             let config_dir = app.path().app_config_dir()?;
             settings::migrate_legacy(&config_dir);
@@ -69,11 +73,18 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 codex::start_idle_task(m, wake);
             });
+            // Reopen the projects that were open at quit, one window each.
+            let reopen: Vec<PathBuf> = settings
+                .open_projects
+                .iter()
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .collect();
             app.manage(AppState {
                 attachments: Arc::new(std::sync::Mutex::new(attachments::Store::new(
                     path.parent().unwrap().join("attachments"),
                 ))),
-                project: Mutex::new(None),
+                windows: registry.clone(),
                 settings: Mutex::new(settings),
                 settings_path: path,
                 agents: agents::Registry {
@@ -84,6 +95,12 @@ pub fn run() {
                 quit_confirmed: AtomicBool::new(false),
                 notifications: notices,
             });
+            if let Some(first) = reopen.first() {
+                registry.set_pending("main", first.clone());
+            }
+            for project in reopen.into_iter().skip(1) {
+                let _ = windows::open(app.handle(), Some(project));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -118,6 +135,13 @@ pub fn run() {
             commands::project_pick_directory,
             commands::project_open,
             commands::project_close,
+            commands::window_open,
+            commands::window_initial_project,
+            commands::window_others,
+            commands::window_close,
+            commands::app_request_quit,
+            commands::app_quit_step,
+            commands::app_report_attention,
             commands::file_list_directory,
             commands::file_read,
             commands::file_stat,
@@ -127,7 +151,9 @@ pub fn run() {
             commands::file_create,
             commands::file_rename,
             commands::file_trash,
-            commands::codex_fuzzy_file_search,
+            commands::project_file_search,
+            agents::claude_detect,
+            agents::agent_availability,
             commands::git_refresh,
             commands::codex_get_state,
             commands::codex_get_models,
@@ -155,9 +181,13 @@ pub fn run() {
             commands::codex_respond_server_request,
             commands::codex_command_output,
             commands::codex_sleep_now,
-            commands::app_quit,
             commands::open_external
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                windows::closed(window.app_handle(), window.label());
+            }
+        })
         .build(tauri::generate_context!())
         .expect("Unable to start Bindaas")
         .run(|handle, event| {
@@ -165,7 +195,7 @@ pub fn run() {
                 let state = handle.state::<AppState>();
                 if !state.quit_confirmed.load(Ordering::SeqCst) {
                     api.prevent_exit();
-                    let _ = handle.emit("workbench://quit-requested", ());
+                    windows::request_quit(handle);
                 }
             }
             if let tauri::RunEvent::Exit = event {

@@ -2,11 +2,8 @@
 use crate::{claude, codex, commands, settings, AppState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    path::PathBuf,
-    sync::{atomic::Ordering, Arc},
-};
-use tauri::State;
+use std::sync::{atomic::Ordering, Arc};
+use tauri::{AppHandle, State, Window};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -99,15 +96,14 @@ pub fn codex_sink(sink: codex::Sink) -> codex::Sink {
         sink(&name.replacen("codex://", "agent://", 1), payload);
     })
 }
-async fn root(s: &AppState) -> Result<PathBuf, String> {
-    s.project
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "Open a project first".into())
-}
-async fn claude_client(s: &AppState, id: Option<&str>) -> Result<Arc<claude::Client>, String> {
-    let root = root(s).await?;
+use commands::root;
+const SETTINGS_CHANGED: &str = "workbench://settings-changed";
+async fn claude_client(
+    s: &AppState,
+    window: &Window,
+    id: Option<&str>,
+) -> Result<Arc<claude::Client>, String> {
+    let root = root(s, window)?;
     let settings = s.settings.lock().await.clone();
     if !settings.claude_enabled {
         return Err("Connect Claude Code in Settings → Integrations first.".into());
@@ -119,9 +115,10 @@ async fn claude_client(s: &AppState, id: Option<&str>) -> Result<Arc<claude::Cli
         .await
         .get(&root, id, &exe, settings.codex_idle_timeout_seconds)
         .await
+        .inspect(|c| s.windows.claim(&c.thread(), &root))
 }
-async fn existing(s: &AppState, id: &str) -> Result<Arc<claude::Client>, String> {
-    let root = root(s).await?;
+async fn existing(s: &AppState, window: &Window, id: &str) -> Result<Arc<claude::Client>, String> {
+    let root = root(s, window)?;
     let c = s
         .agents
         .claude
@@ -134,15 +131,19 @@ async fn existing(s: &AppState, id: &str) -> Result<Arc<claude::Client>, String>
     }
     Ok(c)
 }
-async fn claude_history(s: &AppState, id: &str) -> Result<(Value, Vec<Value>), String> {
-    let root = root(s).await?;
+async fn claude_history(
+    s: &AppState,
+    window: &Window,
+    id: &str,
+) -> Result<(Value, Vec<Value>), String> {
+    let root = root(s, window)?;
     let session = native(id);
     let history = tokio::task::spawn_blocking(move || {
         claude::history::read(&claude::history::config_dir(), &root, &session)
     })
     .await
     .map_err(|e| e.to_string())?;
-    let live = existing(s, id).await.ok();
+    let live = existing(s, window, id).await.ok();
     let (summary, mut turns) = match history {
         Ok(h) => h,
         Err(e) => {
@@ -190,9 +191,30 @@ fn page(data: Vec<Value>, cursor: Option<String>, limit: usize) -> Result<Value,
     )
 }
 
+/// Which agents can start conversations: Codex when its CLI is installed, Claude
+/// when it has been connected.
+#[tauri::command]
+pub async fn agent_availability(s: State<'_, AppState>) -> Result<Value, String> {
+    let codex = commands::codex_installed(&s).await;
+    Ok(json!({"codex":codex,"claude":s.settings.lock().await.claude_enabled}))
+}
+/// First-run check: finds Claude Code and reads its version and sign-in state,
+/// without connecting it or starting a session.
+#[tauri::command]
+pub async fn claude_detect(s: State<'_, AppState>) -> Result<Value, String> {
+    let configured = s.settings.lock().await.claude_executable_path.clone();
+    let exe = tokio::task::spawn_blocking(move || claude::discover(configured.as_deref()))
+        .await
+        .map_err(|e| e.to_string())??;
+    let mut status = claude::probe(&exe).await?;
+    status["path"] = json!(exe);
+    Ok(status)
+}
 #[tauri::command]
 pub async fn agent_connect_claude(
+    app: AppHandle,
     s: State<'_, AppState>,
+    window: Window,
     executable: Option<String>,
 ) -> Result<Value, String> {
     let exe = claude::discover(executable.as_deref())?;
@@ -223,28 +245,36 @@ pub async fn agent_connect_claude(
         next.claude_executable_path = executable;
         settings::save(&s.settings_path, &next)?;
         *saved = next;
+        crate::windows::emit_others(&app, window.label(), SETTINGS_CHANGED, Value::Null);
     }
     Ok(status)
 }
 #[tauri::command]
-pub async fn agent_disconnect_claude(s: State<'_, AppState>) -> Result<(), String> {
+pub async fn agent_disconnect_claude(
+    app: AppHandle,
+    s: State<'_, AppState>,
+    window: Window,
+) -> Result<(), String> {
     let _op = s.operations.lock().await;
     s.agents.claude.lock().await.shutdown(false).await?;
     let mut saved = s.settings.lock().await;
     saved.claude_enabled = false;
-    settings::save(&s.settings_path, &saved)
+    settings::save(&s.settings_path, &saved)?;
+    crate::windows::emit_others(&app, window.label(), SETTINGS_CHANGED, Value::Null);
+    Ok(())
 }
 #[tauri::command]
 pub async fn agent_get_state(
     s: State<'_, AppState>,
+    window: Window,
     harness: Option<Harness>,
     thread_id: Option<String>,
 ) -> Result<Value, String> {
     if harness != Some(Harness::Claude) {
-        return commands::codex_get_state(s).await.map(qualify);
+        return commands::codex_get_state(s, window).await.map(qualify);
     }
     if let Some(id) = thread_id {
-        if let Ok(c) = existing(&s, &id).await {
+        if let Ok(c) = existing(&s, &window, &id).await {
             let r = c.runtime.lock().await;
             return Ok(
                 json!({"type":if c.alive.load(Ordering::SeqCst){"ready"}else{"sleeping"},"harness":"claude","threadId":id,"generation":c.generation,"activeThreads":r.turn.as_ref().filter(|t|t["status"]=="inProgress").map(|t|json!({id.clone():t["id"]})).unwrap_or(json!({})),"approvals":r.approvals.len()}),
@@ -309,12 +339,18 @@ pub async fn agent_get_account(
 #[tauri::command]
 pub async fn agent_list_threads(
     s: State<'_, AppState>,
+    window: Window,
     cursor: Option<String>,
     archived: Option<bool>,
 ) -> Result<Value, String> {
     let settings = s.settings.lock().await.clone();
+    // Without the Codex CLI there is no Codex history to list (and nothing to warn about).
+    let codex = commands::codex_installed(&s).await;
     if !settings.claude_enabled {
-        return commands::codex_list_threads(s, cursor, archived)
+        if !codex {
+            return Ok(json!({"data":[],"nextCursor":null}));
+        }
+        return commands::codex_list_threads(s, window, cursor, archived)
             .await
             .map(qualify);
     }
@@ -324,18 +360,19 @@ pub async fn agent_list_threads(
         .transpose()
         .map_err(|_| "Invalid conversation cursor")?
         .unwrap_or(json!({}));
-    let c = if cursors["codexDone"] == true {
+    let c = if cursors["codexDone"] == true || !codex {
         Ok(json!({"data":[],"nextCursor":null}))
     } else {
         commands::codex_list_threads(
             s.clone(),
+            window.clone(),
             cursors["codex"].as_str().map(str::to_owned),
             archived,
         )
         .await
         .map(qualify)
     };
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let rows = tokio::task::spawn_blocking(move || {
         claude::history::list(&claude::history::config_dir(), &root)
     })
@@ -368,7 +405,7 @@ pub async fn agent_list_threads(
     rows.extend(cp["data"].as_array().cloned().unwrap_or_default());
     for t in &mut rows {
         if t["harness"] == "claude" {
-            if let Ok(client) = existing(&s, t["id"].as_str().unwrap_or("")).await {
+            if let Ok(client) = existing(&s, &window, t["id"].as_str().unwrap_or("")).await {
                 let r = client.runtime.lock().await;
                 if let Some(turn) = &r.turn {
                     t["runStatus"] = json!(if !r.approvals.is_empty() {
@@ -393,20 +430,21 @@ pub async fn agent_list_threads(
 #[tauri::command]
 pub async fn agent_resume_thread(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_resume_thread(s, native(&thread_id))
+        return commands::codex_resume_thread(s, window, native(&thread_id))
             .await
             .map(qualify);
     }
-    let (mut thread, turns) = claude_history(&s, &thread_id).await?;
+    let (mut thread, turns) = claude_history(&s, &window, &thread_id).await?;
     let mut settings = turns
         .first()
         .map(|t| t["settings"].clone())
         .unwrap_or_else(|| claude::normalize::settings(None, None));
     let mut approvals = vec![];
-    if let Ok(c) = existing(&s, &thread_id).await {
+    if let Ok(c) = existing(&s, &window, &thread_id).await {
         let r = c.runtime.lock().await;
         settings = r.settings.clone();
         approvals = r.approvals.values().cloned().map(public_approval).collect();
@@ -417,22 +455,23 @@ pub async fn agent_resume_thread(
     }
     saved
         .project_state
-        .insert(root(&s).await?.to_string_lossy().into_owned(), thread_id);
+        .insert(root(&s, &window)?.to_string_lossy().into_owned(), thread_id);
     settings::save(&s.settings_path, &saved)?;
     Ok(json!({"thread":thread,"settings":settings,"approvals":approvals}))
 }
 #[tauri::command]
 pub async fn agent_thread_turns(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     cursor: Option<String>,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_thread_turns(s, native(&thread_id), cursor)
+        return commands::codex_thread_turns(s, window, native(&thread_id), cursor)
             .await
             .map(qualify);
     }
-    let (summary, turns) = claude_history(&s, &thread_id).await?;
+    let (summary, turns) = claude_history(&s, &window, &thread_id).await?;
     let mut result = page(turns, cursor, 30)?;
     if summary["historyTruncated"] == true {
         result["warning"]=json!("Showing the most recent 32 MiB of native history. Older messages remain available in Claude Code.");
@@ -442,16 +481,17 @@ pub async fn agent_thread_turns(
 #[tauri::command]
 pub async fn agent_turn_items(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     turn_id: String,
     cursor: Option<String>,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_turn_items(s, native(&thread_id), turn_id, cursor)
+        return commands::codex_turn_items(s, window, native(&thread_id), turn_id, cursor)
             .await
             .map(qualify);
     }
-    let (_, turns) = claude_history(&s, &thread_id).await?;
+    let (_, turns) = claude_history(&s, &window, &thread_id).await?;
     let items = turns
         .iter()
         .find(|t| t["id"] == turn_id)
@@ -465,6 +505,7 @@ pub async fn agent_turn_items(
 #[tauri::command]
 pub async fn agent_start_turn(
     s: State<'_, AppState>,
+    window: Window,
     harness: Option<Harness>,
     thread_id: Option<String>,
     prompt: String,
@@ -482,6 +523,7 @@ pub async fn agent_start_turn(
     if selected == Harness::Codex {
         return commands::codex_start_turn(
             s,
+            window,
             thread_id.map(|id| native(&id)),
             prompt,
             model,
@@ -500,10 +542,10 @@ pub async fn agent_start_turn(
         .lock()
         .map_err(|e| e.to_string())?
         .claude_input(&attachment_ids.unwrap_or_default())?;
-    let c = claude_client(&s, thread_id.as_deref()).await?;
+    let c = claude_client(&s, &window, thread_id.as_deref()).await?;
     c.emit(
         "baseline",
-        json!({"git":crate::git::snapshot(&root(&s).await?).await}),
+        json!({"git":crate::git::snapshot(&root(&s, &window)?).await}),
     );
     let mode = mode.map(|m| match m {
         codex::input::Mode::Plan => "plan",
@@ -527,17 +569,22 @@ pub async fn agent_start_turn(
 #[tauri::command]
 pub async fn agent_interrupt_turn(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     turn_id: String,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_interrupt_turn(s, native(&thread_id), turn_id).await;
+        return commands::codex_interrupt_turn(s, window, native(&thread_id), turn_id).await;
     }
-    existing(&s, &thread_id).await?.interrupt(&turn_id).await
+    existing(&s, &window, &thread_id)
+        .await?
+        .interrupt(&turn_id)
+        .await
 }
 #[tauri::command]
 pub async fn agent_respond_server_request(
     s: State<'_, AppState>,
+    window: Window,
     generation: u64,
     request_id: String,
     decision: Value,
@@ -546,7 +593,7 @@ pub async fn agent_respond_server_request(
 ) -> Result<(), String> {
     if request_id.starts_with("claude:") {
         let id = thread_id.ok_or("Missing approval conversation")?;
-        return existing(&s, &id)
+        return existing(&s, &window, &id)
             .await?
             .respond(generation, &request_id, &decision, answers)
             .await;
@@ -558,6 +605,10 @@ pub async fn agent_respond_server_request(
         return Err("Approval belongs to another agent".into());
     }
     let id = thread_id.ok_or("Missing approval conversation")?;
+    let project = s.windows.project(window.label());
+    if !s.windows.visible(&codex_key(&id), project.as_deref()) {
+        return Err("Approval belongs to another project window".into());
+    }
     let manager = s.agents.codex.lock().await;
     let client = manager
         .client
@@ -579,20 +630,28 @@ pub async fn agent_respond_server_request(
 #[tauri::command]
 pub async fn agent_update_thread_settings(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     model: Option<String>,
     effort: Option<String>,
     mode: Option<codex::input::Mode>,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_update_thread_settings(s, native(&thread_id), model, effort, mode)
-            .await;
+        return commands::codex_update_thread_settings(
+            s,
+            window,
+            native(&thread_id),
+            model,
+            effort,
+            mode,
+        )
+        .await;
     }
     let _op = s.operations.lock().await;
     if effort.is_some() {
         return Err("Reasoning effort is not exposed by the connected Claude CLI".into());
     }
-    let c = claude_client(&s, Some(&thread_id)).await?;
+    let c = claude_client(&s, &window, Some(&thread_id)).await?;
     c.update(
         model.as_deref(),
         mode.map(|m| match m {
@@ -605,6 +664,7 @@ pub async fn agent_update_thread_settings(
 #[tauri::command]
 pub async fn agent_session_status(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: Option<String>,
     harness: Option<Harness>,
 ) -> Result<Value, String> {
@@ -614,12 +674,12 @@ pub async fn agent_session_status(
         .unwrap_or(harness.unwrap_or_default())
         == Harness::Codex
     {
-        return commands::codex_session_status(s, thread_id.map(|s| native(&s)))
+        return commands::codex_session_status(s, window, thread_id.map(|s| native(&s)))
             .await
             .map(qualify);
     }
     if let Some(id) = thread_id {
-        if let Ok(c) = existing(&s, &id).await {
+        if let Ok(c) = existing(&s, &window, &id).await {
             let r = c.runtime.lock().await;
             return Ok(
                 json!({"thread":null,"settings":r.settings,"usage":r.usage,"generation":c.generation}),
@@ -644,16 +704,18 @@ pub async fn agent_account_status(
 #[tauri::command]
 pub async fn agent_permission_options(
     s: State<'_, AppState>,
+    window: Window,
     harness: Option<Harness>,
 ) -> Result<Value, String> {
     if harness != Some(Harness::Claude) {
-        return commands::codex_permission_options(s).await;
+        return commands::codex_permission_options(s, window).await;
     }
     Ok(json!({"profiles":[],"approvalPolicies":[],"native":true}))
 }
 #[tauri::command]
 pub async fn agent_set_permissions(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     permissions: Option<String>,
     approval_policy: Option<String>,
@@ -661,6 +723,7 @@ pub async fn agent_set_permissions(
     if harness(&thread_id) == Harness::Codex {
         return commands::codex_set_permissions(
             s,
+            window,
             native(&thread_id),
             permissions,
             approval_policy,
@@ -672,32 +735,34 @@ pub async fn agent_set_permissions(
 #[tauri::command]
 pub async fn agent_revert_thread(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     before_turn_id: String,
 ) -> Result<Value, String> {
     if harness(&thread_id) != Harness::Codex {
         return Err("Editing earlier messages is not supported for Claude conversations".into());
     }
-    commands::codex_revert_thread(s, native(&thread_id), before_turn_id)
+    commands::codex_revert_thread(s, window, native(&thread_id), before_turn_id)
         .await
         .map(qualify)
 }
 #[tauri::command]
 pub async fn agent_manage_thread(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     action: String,
     name: Option<String>,
 ) -> Result<Value, String> {
     if harness(&thread_id) == Harness::Codex {
-        return commands::codex_manage_thread(s, native(&thread_id), action, name)
+        return commands::codex_manage_thread(s, window, native(&thread_id), action, name)
             .await
             .map(qualify);
     }
     let _op = s.operations.lock().await;
-    claude_history(&s, &thread_id).await?;
+    claude_history(&s, &window, &thread_id).await?;
     if action == "archive" {
-        if let Ok(c) = existing(&s, &thread_id).await {
+        if let Ok(c) = existing(&s, &window, &thread_id).await {
             c.shutdown(false).await?;
         }
     }
@@ -724,6 +789,7 @@ pub async fn agent_manage_thread(
 #[tauri::command]
 pub async fn agent_command_output(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     turn_id: String,
     item_id: String,
@@ -733,7 +799,7 @@ pub async fn agent_command_output(
         return commands::codex_command_output(s, native(&thread_id), turn_id, item_id, offset)
             .await;
     }
-    let (_, turns) = claude_history(&s, &thread_id).await?;
+    let (_, turns) = claude_history(&s, &window, &thread_id).await?;
     let text = turns
         .iter()
         .find(|t| t["id"] == turn_id)
@@ -754,6 +820,7 @@ pub async fn agent_command_output(
 #[tauri::command]
 pub async fn agent_steer_turn(
     s: State<'_, AppState>,
+    window: Window,
     thread_id: String,
     turn_id: String,
     prompt: String,
@@ -765,6 +832,7 @@ pub async fn agent_steer_turn(
     }
     commands::codex_steer_turn(
         s,
+        window,
         native(&thread_id),
         turn_id,
         prompt,
@@ -776,6 +844,7 @@ pub async fn agent_steer_turn(
 #[tauri::command]
 pub async fn agent_set_speed(
     s: State<'_, AppState>,
+    window: Window,
     generation: u64,
     mut targets: Vec<codex::speed::Target>,
     fast: bool,
@@ -789,7 +858,7 @@ pub async fn agent_set_speed(
     for target in &mut targets {
         target.thread_id = native(&target.thread_id);
     }
-    commands::codex_set_speed(s, generation, targets, fast)
+    commands::codex_set_speed(s, window, generation, targets, fast)
         .await
         .map(qualify)
 }

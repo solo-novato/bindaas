@@ -4,6 +4,19 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
+### Added
+
+- Claude Code works on its own, without the Codex CLI. First-run setup finds either agent (one is enough), new conversations start with the agent you used last, and file search (`@`, `⌘P`) falls back to the files git knows when Codex isn't installed.
+- Multiple projects at once, one window per project: `⌘⇧N`, **New window** in the project menu, or `⌘↵` on a project. Every window runs its own tasks on one shared Codex process, open windows come back at launch, and the dock badge counts all windows.
+
+### Changed
+
+- Choosing another project while tasks are running opens it in a new window instead of asking you to wait.
+- Without the Codex CLI, History no longer warns about it and new conversations no longer default to it.
+- Closing one of several windows stops only that project's tasks (after asking); quitting asks each window about its own tasks and unsaved files.
+
 ## [0.1.0] - 2026-09-28
 
 ### Added
@@ -28,5 +41,6 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 - "Open in default app" refuses apps, scripts, installers, link files, and executables.
 
-[Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/solo-novato/bindaas/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/solo-novato/bindaas/releases/tag/v0.1.0

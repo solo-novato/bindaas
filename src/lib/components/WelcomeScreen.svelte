@@ -7,18 +7,24 @@
     agentLabel,
     busy,
     canResume,
+    noAgent = false,
     onopenproject,
     onsuggest,
     onresume,
+    onsetup,
   }: {
     projectOpen: boolean;
     agentLabel: string;
     busy: boolean;
     canResume: boolean;
+    /** Neither the Codex CLI nor Claude Code is set up yet. */
+    noAgent?: boolean;
     onopenproject: () => void;
     onsuggest: (title: string) => void;
     onresume: () => void;
+    onsetup?: () => void;
   } = $props();
+  const agent = $derived(noAgent ? 'your agent' : agentLabel);
   const taskSuggestions: {
     title: string;
     description: string;
@@ -47,10 +53,15 @@
     <Icon name="workbench" size={26} />
   </div>
   <h1>What are we building?</h1>
+  {#if noAgent}<p class="agent-missing" role="status">
+      No coding agent is set up yet. Install the Codex CLI or Claude Code to
+      start. <button class="text-link" onclick={onsetup}>Set up an agent</button
+      >
+    </p>{/if}
   <p>
     {projectOpen
-      ? `Describe a task for ${agentLabel}, or start from one of these.`
-      : `Open a folder and ${agentLabel} will work inside it with you.`}
+      ? `Describe a task for ${agent}, or start from one of these.`
+      : `Open a folder and ${agent} will work inside it with you.`}
   </p>
   {#if !projectOpen}<button
       class="primary large"
@@ -79,8 +90,8 @@
     {#if canResume}<button class="resume-button" onclick={onresume}
         >Resume last thread →</button
       >{/if}{/if}
-  <div class="quiet-note">
-    <span class="quiet-dot" aria-hidden="true"></span>
-    {agentLabel} starts on your first message and sleeps when idle.
-  </div>
+  {#if !noAgent}<div class="quiet-note">
+      <span class="quiet-dot" aria-hidden="true"></span>
+      {agentLabel} starts on your first message and sleeps when idle.
+    </div>{/if}
 </section>

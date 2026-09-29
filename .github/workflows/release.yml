@@ -45,4 +45,4 @@ jobs:
           body: |
             **Install:** open the DMG, drag Bindaas to Applications, then run
             `xattr -dr com.apple.quarantine /Applications/Bindaas.app` once (the app is not notarized).
-            Requires an Apple silicon Mac (macOS 13.1+) and Codex CLI 0.154.0+. See docs/INSTALL.md.
+            Requires an Apple silicon Mac (macOS 13.1+) and the Codex CLI 0.154.0+ or Claude Code 2.1.274+. See docs/INSTALL.md.

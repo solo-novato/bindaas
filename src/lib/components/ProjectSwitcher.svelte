@@ -4,16 +4,24 @@
     paths,
     current,
     blocked,
+    busyHere = false,
+    elsewhere = [],
     onselect,
     onbrowse,
+    onnewwindow,
     onclose,
     returnFocus,
   }: {
     paths: string[];
     current: string | null;
     blocked: string;
-    onselect: (path: string) => void;
-    onbrowse: () => void;
+    /** Tasks are running in this window, so other projects open in a new one. */
+    busyHere?: boolean;
+    /** Projects already open in other windows (choosing one brings it forward). */
+    elsewhere?: string[];
+    onselect: (path: string, newWindow: boolean) => void;
+    onbrowse: (newWindow: boolean) => void;
+    onnewwindow: () => void;
     onclose: () => void;
     returnFocus?: HTMLElement;
   } = $props();
@@ -45,9 +53,9 @@
       },
     };
   }
-  function choose(path: string) {
+  function choose(path: string, newWindow = false) {
     if (path === current) onclose();
-    else if (!blocked) onselect(path);
+    else if (!blocked) onselect(path, newWindow || busyHere);
   }
   function keys(event: KeyboardEvent) {
     if (event.isComposing) return;
@@ -62,7 +70,8 @@
         ?.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      if (matches[selected]) choose(matches[selected]);
+      if (matches[selected])
+        choose(matches[selected], event.metaKey || event.ctrlKey);
     }
   }
 </script>
@@ -110,6 +119,8 @@
     </div>
     {#if blocked}<p class="project-switcher-notice" role="status">
         {blocked}
+      </p>{:else if busyHere}<p class="project-switcher-notice" role="status">
+        Tasks are running here, so other projects open in a new window.
       </p>{/if}
     <div
       class="project-switcher-results"
@@ -125,7 +136,7 @@
           aria-disabled={!!blocked && path !== current}
           class:highlighted={selected === index}
           tabindex="-1"
-          onclick={() => choose(path)}
+          onclick={(event) => choose(path, event.metaKey || event.ctrlKey)}
         >
           <span class="project-switcher-icon" aria-hidden="true"
             ><Icon name="folder" size={22} /></span
@@ -133,6 +144,8 @@
             ><strong>{path.split('/').filter(Boolean).at(-1) || path}</strong
             ><small>{path}</small></span
           >{#if path === current}<span class="project-current">Current</span
+            >{:else if elsewhere.includes(path)}<span class="project-current"
+              >Open in another window</span
             >{:else}<Icon name="arrow-right" size={16} />{/if}
         </button>{:else}<p class="project-switcher-empty">
           {query
@@ -141,9 +154,17 @@
         </p>{/each}
     </div>
     <footer>
-      <span><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>↵</kbd> to open</span
-      ><button class="primary" disabled={!!blocked} onclick={onbrowse}
-        >Open another folder…</button
+      <span
+        ><kbd>↑</kbd> <kbd>↓</kbd> to choose · <kbd>↵</kbd> to open ·
+        <kbd>⌘</kbd><kbd>↵</kbd> in a new window</span
+      ><span class="project-switcher-actions"
+        ><button onclick={onnewwindow}>New window</button><button
+          class="primary"
+          disabled={!!blocked}
+          onclick={(event) =>
+            onbrowse(event.metaKey || event.ctrlKey || busyHere)}
+          >Open another folder…</button
+        ></span
       >
     </footer>
   </div>

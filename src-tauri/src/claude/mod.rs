@@ -160,6 +160,8 @@ impl Client {
             o.insert("harness".into(), json!("claude"));
             o.insert("generation".into(), json!(self.generation));
             o.entry("threadId").or_insert_with(|| json!(self.thread()));
+            // Routes the event to the window showing this project.
+            o.insert("projectRoot".into(), json!(self.root));
         }
         (self.sink)(&format!("agent://{name}"), payload);
     }
@@ -869,8 +871,20 @@ impl Manager {
             .cloned()
     }
     pub async fn shutdown(&self, force: bool) -> Result<(), String> {
+        self.shutdown_where(|_| true, force).await
+    }
+    /// Stops only the sessions working in `root` (one project window).
+    pub async fn shutdown_root(&self, root: &Path, force: bool) -> Result<(), String> {
+        self.shutdown_where(|c| c.root == root, force).await
+    }
+    async fn shutdown_where(
+        &self,
+        include: impl Fn(&Client) -> bool,
+        force: bool,
+    ) -> Result<(), String> {
+        let clients: Vec<&Arc<Client>> = self.clients.values().filter(|c| include(c)).collect();
         if !force {
-            for c in self.clients.values() {
+            for c in &clients {
                 let r = c.runtime.lock().await;
                 if c.alive.load(Ordering::SeqCst)
                     && (r.turn.as_ref().is_some_and(|t| t["status"] == "inProgress")
@@ -881,7 +895,7 @@ impl Manager {
                 }
             }
         }
-        for c in self.clients.values() {
+        for c in clients {
             c.shutdown(force).await?;
         }
         Ok(())

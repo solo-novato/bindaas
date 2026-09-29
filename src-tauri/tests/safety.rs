@@ -76,6 +76,17 @@ async fn git_scopes_nested_projects_and_separates_staged_changes() {
     assert!(snapshot.staged.contains("+staged change"));
     assert!(snapshot.unstaged.contains("+unstaged change"));
     assert!(!snapshot.unstaged.contains("outside change"));
+    // File search without Codex lists what git knows, relative to the project:
+    // new files included, ignored ones and files outside the project left out.
+    std::fs::write(root.join("nested/.gitignore"), "ignored.log\n").unwrap();
+    std::fs::write(root.join("nested/ignored.log"), "noise\n").unwrap();
+    let files = git::list_files(&root.join("nested")).await.unwrap();
+    for expected in ["file with spaces.txt", "new\nfile", ".gitignore"] {
+        assert!(files.iter().any(|f| f == expected), "missing {expected:?}");
+    }
+    assert!(!files
+        .iter()
+        .any(|f| f == "ignored.log" || f == "outside" || f.starts_with("..")));
 }
 
 #[test]

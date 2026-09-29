@@ -567,7 +567,7 @@ test('@ mentions search the project only while typing and insert file paths', as
   const searches = () =>
     page.evaluate(() =>
       (window as any).testCalls
-        .filter((c: any) => c.command === 'codex_fuzzy_file_search')
+        .filter((c: any) => c.command === 'project_file_search')
         .map((c: any) => c.args.query),
     );
   expect(await searches()).toEqual([]);

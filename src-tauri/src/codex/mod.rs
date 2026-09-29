@@ -288,7 +288,7 @@ impl Client {
             let turn_id = p["turnId"].as_str().unwrap_or("");
             match method{
                 "thread/name/updated"=>self.emit("thread-name",json!({"threadId":thread,"name":p["threadName"]})),
-                "thread/started"=>self.emit("thread-name",json!({"threadId":p["thread"]["id"],"name":p["thread"]["name"]})),
+                "thread/started"=>self.emit("thread-name",json!({"threadId":p["thread"]["id"],"name":p["thread"]["name"],"projectRoot":p["thread"]["cwd"]})),
                 "thread/archived"=>{self.resumed.lock().await.remove(thread);self.emit("thread-archived",json!({"threadId":thread}));},
                 "thread/status/changed"=>self.emit("thread-status",json!({"threadId":thread,"status":p["status"]})),
                 "thread/tokenUsage/updated"=>{

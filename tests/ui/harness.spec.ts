@@ -219,3 +219,125 @@ test('harness setup errors stay actionable and laptop questions remain reachable
     });
   }
 });
+
+test('Claude Code alone is enough: setup connects it, new conversations use it, and nothing asks for Codex', async ({
+  page,
+}) => {
+  await page.evaluate(() =>
+    localStorage.setItem('fixture-onboarding', 'pending'),
+  );
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.testCodexInstalled = false;
+    w.testDetect = new Error(
+      'Codex CLI not found. Install it (npm install -g @openai/codex, or brew install codex), then reconnect.',
+    );
+    w.testClaudeDetect = {
+      path: '/Users/me/.local/bin/claude',
+      version: '2.1.280',
+      authenticated: true,
+      authMethod: 'claude.ai',
+    };
+    w.testRecentProjects = [];
+  });
+  await page.reload();
+  await installClaudeFixture(page);
+  const setup = page.getByRole('region', { name: 'Set up Bindaas' });
+  await expect(setup.getByRole('article', { name: 'Codex CLI' })).toContainText(
+    'Not installed on this Mac.',
+  );
+  const claude = setup.getByRole('article', { name: 'Claude Code' });
+  await expect(claude).toContainText(
+    'Found Claude Code 2.1.280, signed in with claude.ai.',
+  );
+
+  // Skipping setup without any agent explains what is missing and leads back.
+  await setup.getByRole('button', { name: 'Skip setup' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'No coding agent' }),
+  ).toContainText('Install the Codex CLI or Claude Code to start.');
+  await page.getByRole('button', { name: 'Set up an agent' }).click();
+  await claude.getByRole('button', { name: 'Use Claude Code' }).click();
+  await expect(claude).toContainText('Connected · Claude Code 2.1.280');
+  await expect(setup.locator('.setup-step').first()).toHaveAttribute(
+    'data-state',
+    'done',
+  );
+  await setup.getByRole('button', { name: 'Open a project' }).click();
+  await expect(setup).toHaveCount(0);
+
+  // Only Claude can run: no agent picker, and new conversations use Claude.
+  await expect(
+    page.getByRole('combobox', { name: 'Agent', exact: true }),
+  ).toHaveCount(0);
+  await expect(page.locator('.quiet-note')).toContainText('Claude starts');
+  await page
+    .getByRole('textbox', { name: 'Task prompt' })
+    .fill('Claude-only task');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Stop', exact: false }),
+  ).toBeVisible();
+  const calls = await page.evaluate(() => (window as any).testAgentCalls);
+  expect(
+    calls
+      .filter((c: any) => c.command === 'agent_start_turn')
+      .map((c: any) => c.args.harness),
+  ).toEqual(['claude']);
+  // The agent used last is remembered for new conversations.
+  expect(
+    calls.filter((c: any) => c.command === 'settings_save').at(-1)?.args.value
+      .lastAgent,
+  ).toBe('claude');
+  // Nothing tried to start Codex or complained that it is missing.
+  expect(
+    calls.filter(
+      (c: any) =>
+        /^(agent_get_models|agent_get_account|agent_start_turn|agent_session_status)$/.test(
+          c.command,
+        ) &&
+        c.args.harness !== 'claude' &&
+        !c.args.threadId?.startsWith('claude:'),
+    ),
+  ).toEqual([]);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.keyboard.press('Meta+k');
+  await expect(
+    page.getByRole('option', { name: /Write to Claude/ }),
+  ).toBeVisible();
+});
+
+test('after a relaunch with only Claude connected, new conversations still start with Claude', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.testCodexInstalled = false;
+    w.testSettingsPatch = { claudeEnabled: true };
+  });
+  await page.reload();
+  await installClaudeFixture(page);
+  await page.evaluate(
+    () => ((window as any).testSettingsPatch = { claudeEnabled: true }),
+  );
+  await openProject(page);
+  await expect(
+    page.getByRole('combobox', { name: 'Agent', exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: 'New task', exact: true }).click();
+  await page
+    .getByRole('textbox', { name: 'Task prompt' })
+    .fill('After relaunch');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Stop', exact: false }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      (window as any).testAgentCalls
+        .filter((c: any) => c.command === 'agent_start_turn')
+        .map((c: any) => c.args.harness),
+    ),
+  ).toEqual(['claude']);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});

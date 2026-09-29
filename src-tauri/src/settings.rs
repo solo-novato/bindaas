@@ -13,6 +13,8 @@ pub struct Settings {
     pub new_chat_access: String,
     /// First-run setup was finished or skipped.
     pub onboarding_complete: bool,
+    /// The agent new conversations start with ("codex" or "claude"): the one used last.
+    pub last_agent: Option<String>,
     pub desktop_notifications: bool,
     pub pinned_threads: Vec<String>,
     pub codex_executable_path: Option<String>,
@@ -22,6 +24,8 @@ pub struct Settings {
     pub claude_titles: HashMap<String, String>,
     pub claude_archived: Vec<String>,
     pub recent_projects: Vec<String>,
+    /// Projects open in windows at quit, reopened at launch (first one in the main window).
+    pub open_projects: Vec<String>,
     pub project_state: HashMap<String, String>,
     #[serde(skip_serializing)]
     pub last_model: Option<String>,
@@ -39,6 +43,7 @@ impl Default for Settings {
             motion: "expressive".into(),
             new_chat_access: "standard".into(),
             onboarding_complete: false,
+            last_agent: None,
             desktop_notifications: false,
             pinned_threads: vec![],
             codex_executable_path: None,
@@ -48,6 +53,7 @@ impl Default for Settings {
             claude_titles: HashMap::new(),
             claude_archived: vec![],
             recent_projects: vec![],
+            open_projects: vec![],
             project_state: HashMap::new(),
             last_model: None,
             last_reasoning_effort: None,

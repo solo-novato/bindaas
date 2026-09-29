@@ -1,28 +1,84 @@
-use crate::{attachments, codex, files, git, settings, AppState};
+use crate::{agents::codex_key, attachments, codex, files, git, settings, windows, AppState};
 use serde_json::{json, Value};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
 };
-use tauri::State;
-async fn root(s: &AppState) -> Result<PathBuf, String> {
-    s.project
-        .lock()
-        .await
-        .clone()
+use tauri::{AppHandle, State};
+/// The project shown in the window that sent the command.
+pub(crate) fn root(s: &AppState, window: &tauri::Window) -> Result<PathBuf, String> {
+    s.windows
+        .project(window.label())
         .ok_or("Open a project first".into())
 }
 async fn client(s: &AppState) -> Result<Arc<codex::Client>, String> {
     s.agents.codex.lock().await.ready().await
 }
-async fn idle(s: &AppState) -> Result<(), String> {
+/// Refuses to leave a project while its own tasks, questions, or a sign-in are
+/// pending. Other windows' work is unaffected.
+async fn idle(s: &AppState, root: &Path) -> Result<(), String> {
     if let Some(c) = &s.agents.codex.lock().await.client {
-        if !c.idle().await {
+        let mine = |id: &str| s.windows.visible(&codex_key(id), Some(root));
+        let working = c.active.lock().await.keys().any(|id| mine(id));
+        let waiting = c
+            .approvals
+            .lock()
+            .await
+            .values()
+            .any(|a| a.params["threadId"].as_str().is_some_and(mine));
+        if working || waiting || c.login.load(Ordering::SeqCst) {
             return Err("Stop the active task or finish login before switching projects".into());
         }
     }
-    s.agents.claude.lock().await.shutdown(false).await?;
-    Ok(())
+    s.agents
+        .claude
+        .lock()
+        .await
+        .shutdown_root(root, false)
+        .await
+}
+/// Checks a conversation belongs to this window's project and remembers that, so
+/// its events reach this window.
+async fn owned(s: &AppState, c: &codex::Client, id: &str, root: &Path) -> Result<Value, String> {
+    let current = verify_thread(c, id, root).await?;
+    s.windows.claim(&codex_key(id), root);
+    Ok(current)
+}
+fn canonical_dir(path: &str) -> Result<PathBuf, String> {
+    let root = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if !root.is_dir() {
+        return Err("Choose a directory".into());
+    }
+    Ok(root)
+}
+/// Interrupts running Codex turns (all of them, or only `project`'s) and stops Claude.
+async fn interrupt(s: &AppState, project: Option<&Path>) {
+    let c = s.agents.codex.lock().await.client.clone();
+    if let Some(c) = c {
+        let active = c.active.lock().await.clone();
+        for (thread, turn) in active {
+            if project.is_some_and(|root| !s.windows.visible(&codex_key(&thread), Some(root))) {
+                continue;
+            }
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                c.request("turn/interrupt", json!({"threadId":thread,"turnId":turn})),
+            )
+            .await;
+        }
+    }
+    let claude = s.agents.claude.lock().await;
+    let _ = match project {
+        Some(root) => claude.shutdown_root(root, true).await,
+        None => claude.shutdown(true).await,
+    };
+}
+/// Before the app exits: stop every task and put the agents to sleep.
+pub(crate) async fn stop_agents(s: &AppState) {
+    interrupt(s, None).await;
+    let _ = s.agents.codex.lock().await.sleep(true).await;
 }
 async fn persist_thread(s: &AppState, root: &str, id: &str) -> Result<(), String> {
     let mut settings = s.settings.lock().await;
@@ -42,7 +98,9 @@ pub async fn settings_get(s: State<'_, AppState>) -> Result<settings::Settings, 
 }
 #[tauri::command]
 pub async fn settings_save(
+    app: AppHandle,
     s: State<'_, AppState>,
+    window: tauri::Window,
     value: settings::Settings,
 ) -> Result<(), String> {
     if !(5..=86400).contains(&value.codex_idle_timeout_seconds) {
@@ -53,6 +111,13 @@ pub async fn settings_save(
     }
     if let Some(path) = &value.codex_executable_path {
         codex::discover(Some(path))?;
+    }
+    if value
+        .last_agent
+        .as_deref()
+        .is_some_and(|a| a != "codex" && a != "claude")
+    {
+        return Err("Unknown agent".into());
     }
     let mut m = s.agents.codex.lock().await;
     if m.executable != value.codex_executable_path {
@@ -67,6 +132,7 @@ pub async fn settings_save(
     let mut current = s.settings.lock().await;
     let mut value = value;
     value.recent_projects = current.recent_projects.clone();
+    value.open_projects = current.open_projects.clone();
     value.project_state = current.project_state.clone();
     value.claude_enabled = current.claude_enabled;
     value.claude_executable_path = current.claude_executable_path.clone();
@@ -77,13 +143,22 @@ pub async fn settings_save(
         .enabled
         .store(value.desktop_notifications, Ordering::SeqCst);
     *current = value;
+    drop(current);
+    // Other windows pick up appearance, motion, and other shared preferences.
+    windows::emit_others(
+        &app,
+        window.label(),
+        "workbench://settings-changed",
+        Value::Null,
+    );
     Ok(())
 }
 #[tauri::command]
 pub async fn attachments_pick(
     s: State<'_, AppState>,
+    window: tauri::Window,
 ) -> Result<Vec<attachments::Attachment>, String> {
-    root(&s).await?;
+    root(&s, &window)?;
     let picked = rfd::AsyncFileDialog::new()
         .set_title("Attach files or images")
         .pick_files()
@@ -106,9 +181,10 @@ pub async fn attachments_pick(
 #[tauri::command]
 pub async fn attachment_preview(
     s: State<'_, AppState>,
+    window: tauri::Window,
     id: String,
 ) -> Result<attachments::Preview, String> {
-    root(&s).await?;
+    root(&s, &window)?;
     let store = s.attachments.clone();
     tokio::task::spawn_blocking(move || store.lock().map_err(|e| e.to_string())?.preview(&id))
         .await
@@ -118,10 +194,11 @@ pub async fn attachment_preview(
 #[tauri::command]
 pub async fn attachment_paste_image(
     s: State<'_, AppState>,
+    window: tauri::Window,
     name: String,
     bytes: Vec<u8>,
 ) -> Result<attachments::Attachment, String> {
-    root(&s).await?;
+    root(&s, &window)?;
     let store = s.attachments.clone();
     tokio::task::spawn_blocking(move || {
         store
@@ -141,47 +218,167 @@ pub async fn project_pick_directory() -> Option<String> {
         .await
         .map(|f| f.path().to_string_lossy().into_owned())
 }
+/// Opens a project in the calling window. A project already open in another window
+/// is brought forward there instead (`openElsewhere`), so each project has one window.
 #[tauri::command]
-pub async fn project_open(s: State<'_, AppState>, path: String) -> Result<Value, String> {
+pub async fn project_open(
+    app: AppHandle,
+    s: State<'_, AppState>,
+    window: tauri::Window,
+    path: String,
+) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = PathBuf::from(path)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    if !root.is_dir() {
-        return Err("Choose a directory".into());
+    let root = canonical_dir(&path)?;
+    let label = window.label();
+    let text = root.to_string_lossy().into_owned();
+    if let Some(other) = s.windows.showing(&root, label) {
+        windows::focus(&app, &other);
+        return Ok(json!({"root":text,"openElsewhere":true}));
     }
-    let same_project = s.project.lock().await.as_ref() == Some(&root);
-    if !same_project {
-        idle(&s).await?;
-        s.agents.codex.lock().await.sleep(false).await?;
+    let previous = s.windows.project(label);
+    if previous.as_ref() != Some(&root) {
+        if let Some(previous) = &previous {
+            idle(&s, previous).await?;
+        }
+        // The shared Codex process restarts between projects only when no other
+        // window is using it.
+        if s.windows.others(label).is_empty() {
+            s.agents.codex.lock().await.sleep(false).await?;
+        }
     }
     let snapshot = git::snapshot(&root).await;
-    *s.project.lock().await = Some(root.clone());
-    let text = root.to_string_lossy().into_owned();
+    s.windows.set_project(label, Some(root.clone()));
+    let name = root
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    // Hidden in the title bar, but named in the Window menu and Mission Control.
+    let _ = window.set_title(&format!("{name} — Bindaas"));
     let mut settings = s.settings.lock().await;
     settings.recent_projects.retain(|p| p != &text);
     settings.recent_projects.insert(0, text.clone());
     settings.recent_projects.truncate(12);
+    let open = &mut settings.open_projects;
+    match previous
+        .map(|p| p.to_string_lossy().into_owned())
+        .and_then(|p| open.iter().position(|o| *o == p))
+    {
+        Some(index) => open[index] = text.clone(),
+        None => open.push(text.clone()),
+    }
+    let mut seen = std::collections::HashSet::new();
+    open.retain(|p| seen.insert(p.clone()));
     settings::save(&s.settings_path, &settings)?;
     Ok(
-        json!({"root":text,"displayName":root.file_name().unwrap_or_default().to_string_lossy(),"git":snapshot,"lastThreadId":settings.project_state.get(&text)}),
+        json!({"root":text,"displayName":name,"git":snapshot,"lastThreadId":settings.project_state.get(&text)}),
     )
 }
 #[tauri::command]
-pub async fn project_close(s: State<'_, AppState>) -> Result<(), String> {
+pub async fn project_close(s: State<'_, AppState>, window: tauri::Window) -> Result<(), String> {
     let _op = s.operations.lock().await;
-    idle(&s).await?;
-    s.agents.codex.lock().await.sleep(false).await?;
-    *s.project.lock().await = None;
+    let label = window.label();
+    if let Some(previous) = s.windows.project(label) {
+        idle(&s, &previous).await?;
+        let text = previous.to_string_lossy().into_owned();
+        let mut settings = s.settings.lock().await;
+        settings.open_projects.retain(|p| p != &text);
+        settings::save(&s.settings_path, &settings)?;
+    }
+    if s.windows.others(label).is_empty() {
+        s.agents.codex.lock().await.sleep(false).await?;
+    }
+    s.windows.set_project(label, None);
+    let _ = window.set_title("Bindaas");
+    Ok(())
+}
+/// Opens a new window, optionally with a project (brought forward if already open).
+#[tauri::command]
+pub async fn window_open(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    let project = path.as_deref().map(canonical_dir).transpose()?;
+    windows::open(&app, project).map(|_| ())
+}
+/// The project chosen for this window before it loaded (a new or restored window).
+#[tauri::command]
+pub async fn window_initial_project(
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<Option<String>, String> {
+    Ok(s.windows
+        .take_pending(window.label())
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+/// The other open windows: how many, and the projects they show.
+#[tauri::command]
+pub async fn window_others(
+    app: AppHandle,
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<Value, String> {
+    use tauri::Manager;
+    let projects: Vec<String> = s
+        .windows
+        .others(window.label())
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let count = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.as_str() != window.label())
+        .count();
+    Ok(json!({"count":count,"projects":projects}))
+}
+/// Closes one window while others stay open: its project's running tasks stop and
+/// it is no longer reopened at launch. (Closing the last window quits instead.)
+#[tauri::command]
+pub async fn window_close(
+    app: AppHandle,
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<(), String> {
+    {
+        let _op = s.operations.lock().await;
+        if let Some(root) = s.windows.project(window.label()) {
+            interrupt(&s, Some(&root)).await;
+            let text = root.to_string_lossy().into_owned();
+            let mut settings = s.settings.lock().await;
+            settings.open_projects.retain(|p| p != &text);
+            settings::save(&s.settings_path, &settings)?;
+        }
+    }
+    windows::closed(&app, window.label());
+    window.destroy().map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub async fn app_request_quit(app: AppHandle) {
+    windows::request_quit(&app);
+}
+/// This window's answer to a quit request (after its own confirmations).
+#[tauri::command]
+pub async fn app_quit_step(app: AppHandle, window: tauri::Window, approved: bool) {
+    windows::answer_quit(&app, window.label(), approved);
+}
+/// How many conversations wait on the user in this window; the dock shows the total.
+#[tauri::command]
+pub async fn app_report_attention(
+    app: AppHandle,
+    s: State<'_, AppState>,
+    window: tauri::Window,
+    count: u32,
+) -> Result<(), String> {
+    let total = s.windows.set_attention(window.label(), count);
+    windows::set_badge(&app, total);
     Ok(())
 }
 #[tauri::command]
 pub async fn file_list_directory(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
     show_hidden: bool,
 ) -> Result<files::Directory, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || files::list(&root, &relative_path, show_hidden))
         .await
         .map_err(|e| e.to_string())?
@@ -189,9 +386,10 @@ pub async fn file_list_directory(
 #[tauri::command]
 pub async fn file_read(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
 ) -> Result<files::FileData, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || files::read(&root, &relative_path))
         .await
         .map_err(|e| e.to_string())?
@@ -199,9 +397,10 @@ pub async fn file_read(
 #[tauri::command]
 pub async fn file_stat(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
 ) -> Result<files::Fingerprint, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || {
         files::fingerprint(&files::contained(&root, &relative_path)?)
     })
@@ -211,12 +410,13 @@ pub async fn file_stat(
 #[tauri::command]
 pub async fn file_save(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
     expected_fingerprint: files::Fingerprint,
     content: String,
 ) -> Result<files::FileData, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || {
         files::save(&root, &relative_path, &expected_fingerprint, &content)
     })
@@ -226,9 +426,10 @@ pub async fn file_save(
 #[tauri::command]
 pub async fn file_reveal_in_system(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
 ) -> Result<(), String> {
-    let p = files::contained(&root(&s).await?, &relative_path)?;
+    let p = files::contained(&root(&s, &window)?, &relative_path)?;
     // Finder selects the item itself rather than only opening its folder.
     #[cfg(target_os = "macos")]
     {
@@ -247,20 +448,22 @@ pub async fn file_reveal_in_system(
 #[tauri::command]
 pub async fn file_open_default(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
 ) -> Result<(), String> {
-    let p = files::safe_to_open(&root(&s).await?, &relative_path)?;
+    let p = files::safe_to_open(&root(&s, &window)?, &relative_path)?;
     open::that(p).map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub async fn file_create(
     s: State<'_, AppState>,
+    window: tauri::Window,
     parent: String,
     name: String,
     directory: bool,
 ) -> Result<String, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || files::create(&root, &parent, &name, directory))
         .await
         .map_err(|e| e.to_string())?
@@ -268,35 +471,58 @@ pub async fn file_create(
 #[tauri::command]
 pub async fn file_rename(
     s: State<'_, AppState>,
+    window: tauri::Window,
     relative_path: String,
     name: String,
 ) -> Result<String, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || files::rename(&root, &relative_path, &name))
         .await
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub async fn file_trash(s: State<'_, AppState>, relative_path: String) -> Result<(), String> {
+pub async fn file_trash(
+    s: State<'_, AppState>,
+    window: tauri::Window,
+    relative_path: String,
+) -> Result<(), String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     tokio::task::spawn_blocking(move || files::trash(&root, &relative_path))
         .await
         .map_err(|e| e.to_string())?
 }
-/// On-demand project file search through Codex. Runs only while the user is typing a query.
+/// Whether the Codex CLI can be found (a cheap lookup; nothing is started).
+pub(crate) async fn codex_installed(s: &AppState) -> bool {
+    let configured = s.settings.lock().await.codex_executable_path.clone();
+    tokio::task::spawn_blocking(move || codex::discover(configured.as_deref()).is_ok())
+        .await
+        .unwrap_or(false)
+}
+/// On-demand project file search while the user types (⌘P, @ mentions). Uses
+/// Codex's fuzzy search when Codex is installed, otherwise the files git knows.
 #[tauri::command]
-pub async fn codex_fuzzy_file_search(
+pub async fn project_file_search(
     s: State<'_, AppState>,
+    window: tauri::Window,
     query: String,
 ) -> Result<Value, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let query = query.trim().to_owned();
     if query.is_empty() || query.chars().count() > 200 {
         return Ok(json!([]));
     }
-    let c = client(&s).await?;
+    if codex_installed(&s).await {
+        if let Ok(files) = codex_file_search(&s, &root, &query).await {
+            return Ok(files);
+        }
+    }
+    let paths = git::list_files(&root).await.unwrap_or_default();
+    Ok(Value::Array(files::rank_paths(&paths, &query, 50)))
+}
+async fn codex_file_search(s: &AppState, root: &Path, query: &str) -> Result<Value, String> {
+    let c = client(s).await?;
     let response = c
         .request(
             "fuzzyFileSearch",
@@ -314,7 +540,7 @@ pub async fn codex_fuzzy_file_search(
         };
         let absolute = PathBuf::from(base).join(path);
         // Only results inside the open project are offered.
-        let Ok(relative) = absolute.strip_prefix(&root) else {
+        let Ok(relative) = absolute.strip_prefix(root) else {
             continue;
         };
         if relative
@@ -339,19 +565,23 @@ pub async fn codex_fuzzy_file_search(
 #[tauri::command]
 pub async fn codex_revert_thread(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     before_turn_id: String,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     let result = codex::conversations::revert(&c, &root, &thread_id, &before_turn_id).await?;
     c.resumed.lock().await.remove(&thread_id);
     Ok(result)
 }
 #[tauri::command]
-pub async fn git_refresh(s: State<'_, AppState>) -> Result<git::GitSnapshot, String> {
-    Ok(git::snapshot(&root(&s).await?).await)
+pub async fn git_refresh(
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<git::GitSnapshot, String> {
+    Ok(git::snapshot(&root(&s, &window)?).await)
 }
 #[tauri::command]
 pub async fn open_external(url: String) -> Result<(), String> {
@@ -418,12 +648,32 @@ pub async fn codex_choose_executable() -> Option<String> {
         .map(|f| f.path().to_string_lossy().into_owned())
 }
 #[tauri::command]
-pub async fn codex_get_state(s: State<'_, AppState>) -> Result<Value, String> {
+pub async fn codex_get_state(
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<Value, String> {
+    // Each window sees only its own project's running and waiting conversations.
+    let project = s.windows.project(window.label());
+    let mine = |id: &str| s.windows.visible(&codex_key(id), project.as_deref());
     let m = s.agents.codex.lock().await;
     Ok(if let Some(c) = &m.client {
-        let active = c.active.lock().await.clone();
-        let approvals = c.approvals.lock().await;
-        json!({"type":if c.alive.load(Ordering::SeqCst){"ready"}else{"disconnected"},"generation":c.generation,"pid":c.pid,"activeThreads":active,"approvals":approvals.len(),"waitingThreads":approvals.values().filter_map(|a|a.params["threadId"].as_str().map(str::to_owned)).collect::<Vec<_>>()})
+        let active: std::collections::HashMap<String, String> = c
+            .active
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, _)| mine(id))
+            .map(|(id, turn)| (id.clone(), turn.clone()))
+            .collect();
+        let waiting: Vec<String> = c
+            .approvals
+            .lock()
+            .await
+            .values()
+            .filter_map(|a| a.params["threadId"].as_str().filter(|id| mine(id)))
+            .map(str::to_owned)
+            .collect();
+        json!({"type":if c.alive.load(Ordering::SeqCst){"ready"}else{"disconnected"},"generation":c.generation,"pid":c.pid,"activeThreads":active,"approvals":waiting.len(),"waitingThreads":waiting})
     } else {
         json!({"type":"sleeping"})
     })
@@ -487,10 +737,11 @@ pub async fn codex_cancel_login(s: State<'_, AppState>, login_id: String) -> Res
 #[tauri::command]
 pub async fn codex_list_threads(
     s: State<'_, AppState>,
+    window: tauri::Window,
     cursor: Option<String>,
     archived: Option<bool>,
 ) -> Result<Value, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     let v = c
         .request(
@@ -505,12 +756,13 @@ pub async fn codex_list_threads(
 #[tauri::command]
 pub async fn codex_resume_thread(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    let current = verify_thread(&c, &thread_id, &root).await?;
+    let current = owned(&s, &c, &thread_id, &root).await?;
     // Opening a conversation never changes its permissions.
     let v = c.resume_or_attach(&thread_id, &root, current).await?;
     let approvals: Vec<Value> = c
@@ -528,15 +780,16 @@ pub async fn codex_resume_thread(
 #[tauri::command]
 pub async fn codex_update_thread_settings(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     model: Option<String>,
     effort: Option<String>,
     mode: Option<codex::input::Mode>,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    let current = verify_thread(&c, &thread_id, &root).await?;
+    let current = owned(&s, &c, &thread_id, &root).await?;
     let resumed = c.resume_or_attach(&thread_id, &root, current).await?;
     let before = c.effective_settings(&thread_id, &resumed).await;
     let mut patch = json!({"threadId":thread_id});
@@ -559,22 +812,26 @@ pub async fn codex_update_thread_settings(
     Ok(c.effective_settings(&thread_id, &resumed).await)
 }
 #[tauri::command]
-pub async fn codex_permission_options(s: State<'_, AppState>) -> Result<Value, String> {
-    let root = root(&s).await?;
+pub async fn codex_permission_options(
+    s: State<'_, AppState>,
+    window: tauri::Window,
+) -> Result<Value, String> {
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     codex::session::permission_options(&c, &root).await
 }
 #[tauri::command]
 pub async fn codex_set_permissions(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     permissions: Option<String>,
     approval_policy: Option<String>,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    let current = verify_thread(&c, &thread_id, &root).await?;
+    let current = owned(&s, &c, &thread_id, &root).await?;
     let settings = codex::session::set_permissions(
         &c,
         &root,
@@ -589,12 +846,13 @@ pub async fn codex_set_permissions(
 #[tauri::command]
 pub async fn codex_set_speed(
     s: State<'_, AppState>,
+    window: tauri::Window,
     generation: u64,
     targets: Vec<codex::speed::Target>,
     fast: bool,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     if c.generation != generation {
         return Err("Codex reconnected. Refresh status before changing speed.".into());
@@ -605,13 +863,14 @@ pub async fn codex_set_speed(
 #[tauri::command]
 pub async fn codex_session_status(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: Option<String>,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     if let Some(id) = thread_id {
-        let current = verify_thread(&c, &id, &root).await?;
+        let current = owned(&s, &c, &id, &root).await?;
         let v = c.resume_or_attach(&id, &root, current).await?;
         let recorded = codex::thread_settings::recorded(v["thread"].clone()).await;
         let usage = c
@@ -658,12 +917,13 @@ pub async fn codex_account_status(s: State<'_, AppState>) -> Result<Value, Strin
 #[tauri::command]
 pub async fn codex_thread_turns(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     cursor: Option<String>,
 ) -> Result<Value, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    let verified = verify_thread(&c, &thread_id, &root).await?;
+    let verified = owned(&s, &c, &thread_id, &root).await?;
     let recorded = codex::thread_settings::recorded(verified["thread"].clone()).await;
     let v=c.request("thread/turns/list",json!({"threadId":thread_id,"limit":30,"cursor":cursor,"sortDirection":"desc","itemsView":"summary"})).await?;
     let thinking = c.thinking.lock().await.clone();
@@ -702,13 +962,14 @@ pub async fn codex_thread_turns(
 #[tauri::command]
 pub async fn codex_turn_items(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     turn_id: String,
     cursor: Option<String>,
 ) -> Result<Value, String> {
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    verify_thread(&c, &thread_id, &root).await?;
+    owned(&s, &c, &thread_id, &root).await?;
     let completed = c
         .active
         .lock()
@@ -726,6 +987,7 @@ pub async fn codex_turn_items(
 #[tauri::command]
 pub async fn codex_start_turn(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: Option<String>,
     prompt: String,
     model: Option<String>,
@@ -749,11 +1011,11 @@ pub async fn codex_start_turn(
     })
     .await
     .map_err(|e| e.to_string())??;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     let continuing = thread_id.is_some();
     let v = if let Some(id) = thread_id {
-        let current = verify_thread(&c, &id, &root).await?;
+        let current = owned(&s, &c, &id, &root).await?;
         c.resume_or_attach(&id, &root, current).await?
     } else {
         let access = s.settings.lock().await.new_chat_access.clone();
@@ -782,6 +1044,7 @@ pub async fn codex_start_turn(
         .as_str()
         .ok_or("Codex returned no thread ID")?
         .to_string();
+    s.windows.claim(&codex_key(&id), &root);
     if c.active.lock().await.contains_key(&id) {
         return Err("This thread already has a running task; queue a follow-up or stop it".into());
     }
@@ -870,9 +1133,17 @@ pub async fn codex_start_turn(
 #[tauri::command]
 pub async fn codex_interrupt_turn(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     turn_id: String,
 ) -> Result<Value, String> {
+    let project = s.windows.project(window.label());
+    if !s
+        .windows
+        .visible(&codex_key(&thread_id), project.as_deref())
+    {
+        return Err("This task belongs to another project window".into());
+    }
     let c = client(&s).await?;
     if c.active.lock().await.get(&thread_id) != Some(&turn_id) {
         return Err("This turn is no longer active".into());
@@ -929,25 +1200,6 @@ pub async fn codex_sleep_now(s: State<'_, AppState>) -> Result<(), String> {
     s.agents.codex.lock().await.sleep(false).await
 }
 #[tauri::command]
-pub async fn app_quit(s: State<'_, AppState>) -> Result<(), String> {
-    let c = s.agents.codex.lock().await.client.clone();
-    if let Some(c) = c {
-        let active = c.active.lock().await.clone();
-        for (thread, turn) in active {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                c.request("turn/interrupt", json!({"threadId":thread,"turnId":turn})),
-            )
-            .await;
-        }
-    }
-    s.agents.codex.lock().await.sleep(true).await?;
-    s.agents.claude.lock().await.shutdown(true).await?;
-    s.quit_confirmed.store(true, Ordering::SeqCst);
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn notification_test(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     app.notification()
@@ -964,12 +1216,13 @@ pub async fn notification_test(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn codex_manage_thread(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     action: String,
     name: Option<String>,
 ) -> Result<Value, String> {
     let _op = s.operations.lock().await;
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
     let result =
         codex::conversations::manage(&c, &root, &thread_id, &action, name.as_deref()).await?;
@@ -989,6 +1242,7 @@ pub async fn codex_manage_thread(
 #[tauri::command]
 pub async fn codex_steer_turn(
     s: State<'_, AppState>,
+    window: tauri::Window,
     thread_id: String,
     turn_id: String,
     prompt: String,
@@ -999,9 +1253,9 @@ pub async fn codex_steer_turn(
     if (prompt.trim().is_empty() && attachment_ids.is_empty()) || prompt.len() > 128 * 1024 {
         return Err("Add a message or attachment; prompt limit is 128 KiB".into());
     }
-    let root = root(&s).await?;
+    let root = root(&s, &window)?;
     let c = client(&s).await?;
-    verify_thread(&c, &thread_id, &root).await?;
+    owned(&s, &c, &thread_id, &root).await?;
     let store = s.attachments.clone();
     let attachments = tokio::task::spawn_blocking(move || {
         store

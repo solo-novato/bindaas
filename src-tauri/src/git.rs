@@ -39,6 +39,29 @@ async fn run(root: &Path, args: &[&str]) -> Result<(Vec<u8>, bool), String> {
     result.map_err(|_| "Git operation timed out".to_string())?
 }
 
+/// Files git knows in the project: tracked, plus untracked files that are not
+/// ignored. Read on demand for file search; nothing is cached or watched.
+pub async fn list_files(root: &Path) -> Result<Vec<String>, String> {
+    let (bytes, _truncated) = run(
+        root,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+    )
+    .await?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(bytes
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .filter(|p| seen.insert(p.clone()))
+        .collect())
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitFile {

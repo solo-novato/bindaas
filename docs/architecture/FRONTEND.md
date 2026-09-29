@@ -18,6 +18,15 @@ The UI is Svelte 5 (runes) + TypeScript, served by Vite and hosted in the Tauri 
 | Motion            | `lib/motion.ts` — every JS-driven animation goes through it so Power saving and Reduce Motion turn them off                                                                                 |
 | Styles            | `src/app.css` imports `src/styles/*.css` in cascade order: tokens → base → shell → explorer → chat → composer → decisions → review → files → history → settings → dialogs → accent → motion |
 
+## Windows
+
+Each window runs this same app for one project. `App.svelte` listens only for
+events addressed to its own window (`{ target: { kind: 'WebviewWindow', label } }`);
+the Rust side routes agent events by project. A window asks Rust for the project
+chosen for it (`api.initialProject()`); the main window otherwise reopens the last
+project. Closing, quitting, and the dock badge go through Rust so they can account
+for every window.
+
 ## Conventions
 
 - Components receive state as props and report intent through `on…` callbacks; App decides what happens. Snippets are passed where App-owned markup is shared (for example the diff controls used by both the inspector and the review workspace).

@@ -15,6 +15,8 @@ export type LaunchState = {
   motion: 'expressive' | 'saving';
   settingsLoaded: boolean;
   multiAgent: boolean;
+  /** The agent new messages go to ("Codex" or "Claude"). */
+  agentName: string;
   taskRuns: Record<
     string,
     { title: string; error?: string; waiting: boolean; turn: Turn }
@@ -32,6 +34,7 @@ export type LaunchActions = {
   browseFiles: () => unknown;
   showPanel: (panel: 'permissions' | 'status') => unknown;
   chooseProject: () => unknown;
+  newWindow: () => unknown;
   toggleMotion: () => unknown;
   resume: (threadId: string) => unknown;
   open: (path: string) => unknown;
@@ -55,7 +58,7 @@ export function buildLaunchEntries(
     },
     {
       id: 'compose',
-      title: 'Write to Codex',
+      title: `Write to ${state.agentName}`,
       detail: 'Return to your current draft',
       group: 'Actions',
       icon: '↗',
@@ -130,6 +133,15 @@ export function buildLaunchEntries(
       shortcut: '⌘ O',
       disabled: !state.canOpenProject,
       run: () => void actions.chooseProject(),
+    },
+    {
+      id: 'window',
+      title: 'New window',
+      detail: 'Work on another project side by side',
+      group: 'Actions',
+      icon: '⧉',
+      shortcut: '⌘ ⇧ N',
+      run: () => void actions.newWindow(),
     },
     {
       id: 'motion',

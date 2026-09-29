@@ -810,11 +810,12 @@ test('dock badge counts conversations waiting on you and clears', async ({
   await page.getByRole('button', { name: 'New task', exact: true }).click();
   await prompt.fill('Foreground work');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
+  // Each window reports its count; the app shows the total on the dock.
   const badges = () =>
     page.evaluate(() =>
       (window as any).testCalls
-        .filter((c: any) => c.command === 'plugin:window|set_badge_count')
-        .map((c: any) => c.args.value ?? null),
+        .filter((c: any) => c.command === 'app_report_attention')
+        .map((c: any) => c.args.count),
     );
   expect(await badges()).toEqual([]);
   await page.evaluate(() => {
@@ -850,5 +851,5 @@ test('dock badge counts conversations waiting on you and clears', async ({
       waiting: false,
     });
   });
-  await expect.poll(badges).toEqual([1, null]);
+  await expect.poll(badges).toEqual([1, 0]);
 });

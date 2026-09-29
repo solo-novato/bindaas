@@ -100,9 +100,21 @@ test('setup', async ({ page }) => {
   await page.evaluate(() =>
     localStorage.setItem('fixture-onboarding', 'pending'),
   );
+  await page.addInitScript(() => {
+    (window as any).testClaudeDetect = {
+      path: '/opt/homebrew/bin/claude',
+      version: '2.1.280',
+      authenticated: true,
+      authMethod: 'claude.ai',
+    };
+  });
   await page.reload();
+  const setup = page.getByRole('region', { name: 'Set up Bindaas' });
+  await expect(setup.getByRole('article', { name: 'Codex CLI' })).toContainText(
+    'Ready',
+  );
   await expect(
-    page.getByRole('region', { name: 'Set up Bindaas' }),
-  ).toContainText('Found Codex');
+    setup.getByRole('button', { name: 'Use Claude Code' }),
+  ).toBeVisible();
   await capture(page, 'setup');
 });

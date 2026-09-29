@@ -61,6 +61,23 @@
   opacity: 0.7;
 }
 
+.agent-missing {
+  max-width: 460px;
+  margin: 0 auto 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.agent-missing .text-link {
+  padding: 0;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .quiet-note {
   color: var(--muted);
   font-size: var(--fs-xs);

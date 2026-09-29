@@ -115,6 +115,11 @@ export async function mockDesktop(page: Page) {
         callbacks.get(id)?.({ event: `agent://${name}`, payload });
     };
     w.testEmit = emit;
+    // App-level events (window close, quit requests, settings from other windows).
+    w.testEmitApp = (event: string, payload: any = null) => {
+      for (const id of listeners.get(event) ?? [])
+        callbacks.get(id)?.({ event, payload, id });
+    };
     w.testDiskChange = (path: string, text: string) => {
       files[path] = text;
       version++;
@@ -341,6 +346,18 @@ export async function mockDesktop(page: Page) {
           }
           case 'file_open_default':
             return;
+          // agent_availability (agent_ commands arrive here renamed to codex_).
+          case 'codex_availability':
+            return {
+              codex: w.testCodexInstalled !== false,
+              claude: !!w.testSettingsPatch?.claudeEnabled,
+            };
+          case 'claude_detect':
+            if (w.testClaudeDetect instanceof Error) throw w.testClaudeDetect;
+            if (w.testClaudeDetect) return w.testClaudeDetect;
+            throw Error(
+              'Claude Code was not found. Install the official CLI or choose its executable.',
+            );
           case 'codex_detect':
             if (w.testDetect instanceof Error) throw w.testDetect;
             return (
@@ -351,8 +368,8 @@ export async function mockDesktop(page: Page) {
                 minimum: '0.154.0',
               }
             );
-          case 'codex_fuzzy_file_search': {
-            if (w.testSearchFails) throw Error('Codex is not available');
+          case 'project_file_search': {
+            if (w.testSearchFails) throw Error('Search is not available');
             const query = String(args.query).toLowerCase();
             return [...Object.keys(files), ...Object.keys(searchable)]
               .map((path) => {
@@ -730,6 +747,16 @@ export async function mockDesktop(page: Page) {
               nextCursor: null,
             };
           case 'open_external':
+            return;
+          case 'window_initial_project':
+            return w.testInitialProject ?? null;
+          case 'window_others':
+            return w.testOtherWindows ?? { count: 0, projects: [] };
+          case 'window_open':
+          case 'window_close':
+          case 'app_request_quit':
+          case 'app_quit_step':
+          case 'app_report_attention':
             return;
           default:
             return null;

@@ -464,7 +464,7 @@ test('expressive motion settles to zero looping animations when idle', async ({
   await expect.poll(() => runningAnimations(page), { timeout: 4000 }).toBe(0);
 });
 
-test('first-run setup finds Codex, explains sign-in and access, and finishes by opening a project', async ({
+test('first-run setup finds Codex, explains install, sign-in, and access, and finishes by opening a project', async ({
   page,
 }) => {
   await page.evaluate(() => {
@@ -479,16 +479,23 @@ test('first-run setup finds Codex, explains sign-in and access, and finishes by 
   await page.reload();
   const setup = page.getByRole('region', { name: 'Set up Bindaas' });
   await expect(setup).toBeVisible();
-  await expect(setup).toContainText('Codex CLI not found');
-  await expect(setup.getByText('npm install -g @openai/codex')).toBeVisible();
+  const codex = setup.getByRole('article', { name: 'Codex CLI' });
+  await expect(codex).toContainText('Not installed on this Mac.');
+  await expect(codex.getByText('npm install -g @openai/codex')).toBeVisible();
   await expect(
-    setup.getByRole('button', { name: /Sign in with ChatGPT/ }),
-  ).toBeDisabled();
-  // Installing Codex and checking again unlocks sign-in.
+    codex.getByRole('button', { name: /Sign in with ChatGPT/ }),
+  ).toHaveCount(0);
+  // Claude Code is offered too; either agent completes the first step.
+  await expect(
+    setup.getByRole('article', { name: 'Claude Code' }),
+  ).toContainText('npm install -g @anthropic-ai/claude-code');
+  // Installing Codex and checking again finds it and the signed-in account.
   await page.evaluate(() => ((window as any).testDetect = undefined));
-  await setup.getByRole('button', { name: 'Check again' }).click();
-  await expect(setup).toContainText('Found Codex 0.155.0');
-  await expect(setup).toContainText('Signed in as fixture@example.test');
+  await codex.getByRole('button', { name: 'Check again' }).click();
+  await expect(codex).toContainText(
+    'Codex 0.155.0 · signed in as fixture@example.test',
+  );
+  await expect(codex).toContainText('Ready');
   await setup.getByRole('radio', { name: /Full access/ }).check();
   const saves = () =>
     page.evaluate(() =>

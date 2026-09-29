@@ -2,42 +2,67 @@
   import { onMount } from 'svelte';
   import { api } from '../api';
   import Icon from './Icon.svelte';
-  import type { CodexDetection } from '../types';
+  import type { ClaudeDetection, CodexDetection } from '../types';
   let {
     account,
     signingIn,
     access,
     projectOpen,
+    claudeConnected,
     onsignin,
     onchooseexecutable,
     onaccess,
     onopenproject,
+    onclaudeconnected,
     ondone,
   }: {
     account: { type: string; email?: string } | null;
     signingIn: boolean;
     access: 'standard' | 'full';
     projectOpen: boolean;
+    claudeConnected: boolean;
     onsignin: () => void;
     onchooseexecutable: () => Promise<unknown>;
     onaccess: (access: 'standard' | 'full') => void;
     onopenproject: () => Promise<unknown>;
+    onclaudeconnected: () => Promise<unknown>;
     ondone: () => void;
   } = $props();
 
+  // Bindaas needs one coding agent: the Codex CLI, Claude Code, or both.
   let detection = $state<CodexDetection | null>(null);
   let detectError = $state('');
   let detecting = $state(false);
   let checkingAccount = $state(false);
   let signedIn = $state<{ type: string; email?: string } | null>(null);
+  let claude = $state<ClaudeDetection | null>(null);
+  let claudeError = $state('');
+  let claudeDetecting = $state(false);
+  let connecting = $state(false);
   let copied = $state('');
   const who = $derived(account ?? signedIn);
-  const codexReady = $derived(!!detection?.supported);
+  const codexFound = $derived(!!detection?.supported);
+  const codexReady = $derived(codexFound && !!who);
+  const agentReady = $derived(codexReady || claudeConnected);
 
-  const installs = [
+  const codexInstalls = [
     { id: 'npm', label: 'npm', command: 'npm install -g @openai/codex' },
     { id: 'brew', label: 'Homebrew', command: 'brew install codex' },
   ];
+  const claudeInstalls = [
+    {
+      id: 'claude-npm',
+      label: 'npm',
+      command: 'npm install -g @anthropic-ai/claude-code',
+    },
+    {
+      id: 'claude-native',
+      label: 'Installer',
+      command: 'curl -fsSL https://claude.ai/install.sh | bash',
+    },
+  ];
+  const notFound = (message: string, fallback: string) =>
+    /not found/i.test(message) ? fallback : message;
 
   async function detect() {
     detecting = true;
@@ -47,11 +72,11 @@
       if (detection.supported) await checkAccount();
     } catch (e) {
       detection = null;
-      const message = String(e).replace(/^Error: /, '');
       // The install commands are shown below; keep the status line short.
-      detectError = /not found/i.test(message)
-        ? 'Codex CLI not found on this Mac.'
-        : message;
+      detectError = notFound(
+        String(e).replace(/^Error: /, ''),
+        'Not installed on this Mac.',
+      );
     } finally {
       detecting = false;
     }
@@ -66,6 +91,34 @@
       checkingAccount = false;
     }
   }
+  async function detectClaude() {
+    claudeDetecting = true;
+    claudeError = '';
+    try {
+      claude = await api.detectClaude();
+    } catch (e) {
+      claude = null;
+      claudeError = notFound(
+        String(e).replace(/^Error: /, ''),
+        'Not installed on this Mac.',
+      );
+    } finally {
+      claudeDetecting = false;
+    }
+  }
+  async function useClaude() {
+    connecting = true;
+    claudeError = '';
+    try {
+      const status = await api.connectClaude(null);
+      if (status.authenticated) await onclaudeconnected();
+      else claudeError = 'Sign in from a terminal first, then check again.';
+    } catch (e) {
+      claudeError = String(e).replace(/^Error: /, '');
+    } finally {
+      connecting = false;
+    }
+  }
   async function copy(text: string, id: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -77,8 +130,21 @@
   }
   onMount(() => {
     void detect();
+    void detectClaude();
   });
 </script>
+
+{#snippet commands(list: { id: string; label: string; command: string }[])}
+  <div class="commands">
+    {#each list as install}<div class="command">
+        <span class="muted">{install.label}</span>
+        <code>{install.command}</code>
+        <button onclick={() => copy(install.command, install.id)}
+          >{copied === install.id ? 'Copied ✓' : 'Copy'}</button
+        >
+      </div>{/each}
+  </div>
+{/snippet}
 
 <section class="onboarding" aria-labelledby="onboarding-title">
   <header>
@@ -87,100 +153,142 @@
     </div>
     <h1 id="onboarding-title">Set up Bindaas</h1>
     <p>
-      Bindaas runs the coding agents already on your Mac. Three quick steps and
-      you’re in.
+      Bindaas runs the coding agents already on your Mac — the Codex CLI, Claude
+      Code, or both.
     </p>
   </header>
 
   <ol class="setup-steps">
-    <li class="setup-step" data-state={codexReady ? 'done' : 'todo'}>
-      <span class="step-mark" class:complete={!!codexReady} aria-hidden="true"
-        >{#if codexReady}<Icon name="check" size={14} />{:else}1{/if}</span
+    <li class="setup-step" data-state={agentReady ? 'done' : 'todo'}>
+      <span class="step-mark" class:complete={agentReady} aria-hidden="true"
+        >{#if agentReady}<Icon name="check" size={14} />{:else}1{/if}</span
       >
       <div class="step-body">
-        <h2>Install the Codex CLI</h2>
-        {#if detecting}<p class="step-status" role="status">
-            Looking for Codex…
-          </p>
-        {:else if detection && detection.supported}<p
-            class="step-status ok"
-            role="status"
-          >
-            Found Codex {detection.version ?? ''} at
-            <code>{detection.path}</code>
-          </p>
-        {:else if detection}<p class="step-status warn" role="status">
-            Codex {detection.version} is too old. Update to {detection.minimum} or
-            later with one of the commands below.
-          </p>
-        {:else}<p class="step-status warn" role="status">
-            {detectError || 'Codex was not found.'} Install it with one of these,
-            then check again:
-          </p>{/if}
-        {#if !codexReady && !detecting}
-          <div class="commands">
-            {#each installs as install}<div class="command">
-                <span class="muted">{install.label}</span>
-                <code>{install.command}</code>
-                <button onclick={() => copy(install.command, install.id)}
-                  >{copied === install.id ? 'Copied ✓' : 'Copy'}</button
+        <h2>Set up a coding agent</h2>
+        <p class="muted small">You need one. You can add the other anytime.</p>
+        <div class="agents">
+          <article class="agent-card" aria-label="Codex CLI">
+            <h3>
+              Codex CLI {#if codexReady}<span class="ready-badge">Ready</span
+                >{/if}
+            </h3>
+            {#if detecting}<p class="step-status" role="status">
+                Looking for Codex…
+              </p>
+            {:else if codexReady}<p class="step-status ok" role="status">
+                Codex {detection?.version ?? ''} · signed in {who?.email
+                  ? `as ${who.email}`
+                  : `with ${who?.type}`}
+              </p>
+            {:else if codexFound && checkingAccount}<p
+                class="step-status"
+                role="status"
+              >
+                Found Codex {detection?.version ?? ''}. Checking your account…
+              </p>
+            {:else if codexFound}<p class="step-status" role="status">
+                Found Codex {detection?.version ?? ''} at
+                <code>{detection?.path}</code>. Sign in with your ChatGPT
+                account, or run <code>codex login</code> in a terminal (API keys work
+                too).
+              </p>
+              <div class="step-actions">
+                <button class="primary" disabled={signingIn} onclick={onsignin}
+                  >{signingIn
+                    ? 'Waiting for browser…'
+                    : 'Sign in with ChatGPT ↗'}</button
                 >
-              </div>{/each}
-          </div>
-        {/if}
-        <div class="step-actions">
-          <button disabled={detecting} onclick={detect}
-            >{detection || detectError ? 'Check again' : 'Check'}</button
-          >
-          <button
-            disabled={detecting}
-            onclick={async () => {
-              await onchooseexecutable();
-              await detect();
-            }}>Choose Codex executable…</button
-          >
+                <button disabled={checkingAccount} onclick={checkAccount}
+                  >I’ve signed in</button
+                >
+              </div>
+            {:else}<p class="step-status warn" role="status">
+                {detection
+                  ? `Codex ${detection.version} is too old. Update to ${detection.minimum} or later:`
+                  : `${detectError || 'Codex was not found.'} Install it with one of these, then check again:`}
+              </p>
+              {@render commands(codexInstalls)}
+              <div class="step-actions">
+                <button disabled={detecting} onclick={detect}
+                  >Check again</button
+                >
+                <button
+                  disabled={detecting}
+                  onclick={async () => {
+                    await onchooseexecutable();
+                    await detect();
+                  }}>Choose Codex executable…</button
+                >
+              </div>{/if}
+          </article>
+
+          <article class="agent-card" aria-label="Claude Code">
+            <h3>
+              Claude Code {#if claudeConnected}<span class="ready-badge"
+                  >Ready</span
+                >{/if}
+            </h3>
+            {#if claudeConnected}<p class="step-status ok" role="status">
+                Connected{claude
+                  ? ` · Claude Code ${claude.version}${claude.authMethod ? ` · ${claude.authMethod}` : ''}`
+                  : ''}
+              </p>
+            {:else if claudeDetecting}<p class="step-status" role="status">
+                Looking for Claude Code…
+              </p>
+            {:else if claude?.authenticated}<p
+                class="step-status"
+                role="status"
+              >
+                Found Claude Code {claude.version}, signed in{claude.authMethod
+                  ? ` with ${claude.authMethod}`
+                  : ''}.
+              </p>
+              {#if claudeError}<p class="step-status warn" role="alert">
+                  {claudeError}
+                </p>{/if}
+              <div class="step-actions">
+                <button
+                  class="primary"
+                  disabled={connecting}
+                  onclick={useClaude}
+                  >{connecting ? 'Connecting…' : 'Use Claude Code'}</button
+                >
+              </div>
+            {:else if claude}<p class="step-status" role="status">
+                Found Claude Code {claude.version}. Sign in from a terminal,
+                then check again:
+              </p>
+              {@render commands([
+                {
+                  id: 'claude-login',
+                  label: 'Sign in',
+                  command: 'claude auth login',
+                },
+              ])}
+              <div class="step-actions">
+                <button disabled={claudeDetecting} onclick={detectClaude}
+                  >Check again</button
+                >
+              </div>
+            {:else}<p class="step-status warn" role="status">
+                {claudeError || 'Claude Code was not found.'} Install it with one
+                of these, sign in with <code>claude auth login</code>, then
+                check again:
+              </p>
+              {@render commands(claudeInstalls)}
+              <div class="step-actions">
+                <button disabled={claudeDetecting} onclick={detectClaude}
+                  >Check again</button
+                >
+              </div>{/if}
+          </article>
         </div>
       </div>
     </li>
 
-    <li
-      class="setup-step"
-      data-state={who ? 'done' : codexReady ? 'todo' : 'blocked'}
-    >
-      <span class="step-mark" class:complete={!!who} aria-hidden="true"
-        >{#if who}<Icon name="check" size={14} />{:else}2{/if}</span
-      >
-      <div class="step-body">
-        <h2>Sign in to Codex</h2>
-        {#if who}<p class="step-status ok" role="status">
-            Signed in {who.email ? `as ${who.email}` : `with ${who.type}`}
-          </p>
-        {:else if checkingAccount}<p class="step-status" role="status">
-            Checking your Codex account…
-          </p>
-        {:else}<p class="step-status">
-            Use your ChatGPT account, or run <code>codex login</code> in a terminal
-            (API keys work too). Bindaas never sees your credentials.
-          </p>
-          <div class="step-actions">
-            <button
-              class="primary"
-              disabled={!codexReady || signingIn}
-              onclick={onsignin}
-              >{signingIn
-                ? 'Waiting for browser…'
-                : 'Sign in with ChatGPT ↗'}</button
-            >
-            <button
-              disabled={!codexReady || checkingAccount}
-              onclick={checkAccount}>I’ve signed in</button
-            >
-          </div>{/if}
-      </div>
-    </li>
-
     <li class="setup-step" data-state="done">
-      <span class="step-mark" aria-hidden="true">3</span>
+      <span class="step-mark" aria-hidden="true">2</span>
       <div class="step-body">
         <h2>Choose how much new conversations can do</h2>
         <fieldset class="access-choice">
@@ -211,16 +319,17 @@
             ></label
           >
         </fieldset>
-        <p class="muted small">You can change this anytime in Settings.</p>
+        <p class="muted small">
+          Applies to Codex; Claude Code follows its own permission settings. You
+          can change this anytime in Settings.
+        </p>
       </div>
     </li>
   </ol>
 
   <footer class="setup-footer">
     <button class="text-link" onclick={ondone}>Skip setup</button>
-    <p class="muted small">
-      Optional: add Claude Code later in Settings → Integrations.
-    </p>
+    <span class="spacer"></span>
     {#if projectOpen}<button class="primary large" onclick={ondone}
         >Start working <Icon name="arrow-right" size={15} /></button
       >{:else}<button class="primary large" onclick={() => onopenproject()}
@@ -268,12 +377,6 @@
   }
   .setup-step:nth-child(2) {
     animation-delay: 70ms;
-  }
-  .setup-step:nth-child(3) {
-    animation-delay: 140ms;
-  }
-  .setup-step[data-state='blocked'] {
-    opacity: 0.6;
   }
   .step-mark {
     display: grid;
@@ -387,8 +490,36 @@
     gap: 14px;
     margin-top: 18px;
   }
-  .setup-footer p {
+  .setup-footer .spacer {
     flex: 1;
+  }
+  .agents {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .agent-card {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--editor);
+  }
+  .agent-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px;
+    font-size: var(--fs-sm);
+  }
+  .ready-badge {
+    padding: 1px 7px;
+    border-radius: 999px;
+    color: var(--green);
+    border: 1px solid currentColor;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+  }
+  .step-body > .muted.small {
     margin: 0;
   }
   .text-link {

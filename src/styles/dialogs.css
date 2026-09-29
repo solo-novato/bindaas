@@ -160,9 +160,15 @@
   border-top: 1px solid var(--border);
 }
 
-.project-switcher footer > span {
+.project-switcher footer > span:first-child {
   color: var(--muted);
   font-size: var(--fs-xs);
+}
+
+.project-switcher footer > .project-switcher-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .project-switcher header,

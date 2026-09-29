@@ -1,6 +1,6 @@
 # AGENTS.md — guide for coding agents working on Bindaas
 
-Bindaas is a Tauri 2 desktop app (Svelte 5 + TypeScript frontend, Rust core) that drives the user's installed Codex CLI over `codex app-server` (JSON-RPC over stdio) and, optionally, Claude Code. Read `CONTRIBUTING.md` for setup and the project map, and `docs/architecture/` before large changes.
+Bindaas is a Tauri 2 desktop app (Svelte 5 + TypeScript frontend, Rust core) that drives the user's installed coding agents: the Codex CLI over `codex app-server` (JSON-RPC over stdio) and Claude Code over its stream-JSON mode. Either one alone must be enough; never assume Codex is installed. Read `CONTRIBUTING.md` for setup and the project map, and `docs/architecture/` before large changes.
 
 ## Priorities (in order)
 

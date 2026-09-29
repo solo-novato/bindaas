@@ -151,7 +151,9 @@ test('project switcher preserves dirty edits on cancel and recovers from missing
   );
 });
 
-test('project switcher explains active work without interrupting it', async ({
+// Running work keeps a window on its project: another project opens in a new
+// window instead (previously switching was refused until the task finished).
+test('project switcher opens other projects in a new window without interrupting active work', async ({
   page,
 }) => {
   await page.evaluate(
@@ -165,18 +167,27 @@ test('project switcher explains active work without interrupting it', async ({
   await page.locator('.project-button').click();
   const picker = page.getByRole('dialog', { name: 'Switch project' });
   await expect(picker).toContainText(
-    'Finish running tasks before switching projects.',
+    'Tasks are running here, so other projects open in a new window.',
   );
   await expect(
     picker.getByRole('button', { name: 'Open another folder…' }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   await picker.getByRole('combobox').fill('another');
-  await expect(picker.getByRole('option')).toHaveAttribute(
+  await expect(picker.getByRole('option')).not.toHaveAttribute(
     'aria-disabled',
     'true',
   );
   await picker.getByRole('combobox').press('Enter');
-  await expect(picker).toBeVisible();
+  await expect(picker).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).testCalls
+          .filter((c: any) => c.command === 'window_open')
+          .map((c: any) => c.args.path),
+      ),
+    )
+    .toEqual(['/work/another-project']);
   const calls = await page.evaluate(() => (window as any).testCalls);
   expect(calls.filter((c: any) => c.command === 'project_open')).toHaveLength(
     1,
@@ -184,7 +195,9 @@ test('project switcher explains active work without interrupting it', async ({
   expect(
     calls.filter((c: any) => c.command === 'codex_interrupt_turn'),
   ).toHaveLength(0);
-  await page.keyboard.press('Escape');
+  await expect(page.locator('.project-button')).toContainText(
+    'fixture-project',
+  );
   await expect(
     page.getByRole('button', { name: 'Stop', exact: true }),
   ).toBeVisible();

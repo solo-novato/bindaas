@@ -109,6 +109,8 @@
   let project = $state<Project | null>(null);
   let settings = $state<Settings | null>(null);
   let selectedHarness = $state<Harness>('codex');
+  /** The Codex CLI is installed (Claude is available once connected). */
+  let codexInstalled = $state(true);
   const agentLabel = $derived(agentName(selectedHarness));
   const capabilities = $derived(harnessCapabilities[selectedHarness]);
   let connections = $state<Record<string, Connection>>({
@@ -304,6 +306,14 @@
   let treeVersion = $state(0);
   let discovered = $state<Entry[]>([]);
   let projectMenu = $state(false);
+  let elsewhereProjects = $state<string[]>([]);
+  $effect(() => {
+    if (!projectMenu || !isTauri()) return;
+    api
+      .otherWindows()
+      .then((others) => (elsewhereProjects = others.projects))
+      .catch(() => (elsewhereProjects = []));
+  });
   let projectTrigger = $state<HTMLButtonElement>();
   let launcher = $state<LaunchScope | null>(null);
   let findOpen = $state(false);
@@ -384,6 +394,41 @@
       settingsBusy ||
       restoring,
   );
+  // Either agent is enough on its own; the agent picker appears only when both
+  // can run.
+  const claudeReady = $derived(!!settings?.claudeEnabled);
+  const multiAgent = $derived(codexInstalled && claudeReady);
+  const noAgent = $derived(!codexInstalled && !claudeReady);
+  function agentAvailable(harness: Harness) {
+    return harness === 'claude' ? claudeReady : codexInstalled;
+  }
+  /** New conversations start with the agent used last, if it can still run. */
+  function preferredAgent(): Harness {
+    const last = settings?.lastAgent;
+    if (last && agentAvailable(last)) return last;
+    return !codexInstalled && claudeReady ? 'claude' : 'codex';
+  }
+  function rememberAgent(harness: Harness) {
+    if (!settings || settings.lastAgent === harness) return;
+    settings.lastAgent = harness;
+    saveSettings().catch(() => {});
+  }
+  /** Rechecks which agents can run and moves an empty new conversation to one. */
+  async function refreshAgents() {
+    try {
+      codexInstalled = (await api.agentAvailability()).codex;
+    } catch {
+      // Keep the last known state.
+    }
+    const next = preferredAgent();
+    if (
+      !threadId &&
+      !starting &&
+      !agentAvailable(selectedHarness) &&
+      agentAvailable(next)
+    )
+      await newTask(next, true);
+  }
   const launchActions: LaunchActions = {
     newTask: () => newTask(),
     compose: async () => {
@@ -400,6 +445,7 @@
     },
     showPanel: (panel) => (sessionPanel = panel),
     chooseProject: () => chooseProject(),
+    newWindow: () => api.newWindow(),
     toggleMotion: () =>
       setMotion(settings?.motion === 'saving' ? 'expressive' : 'saving'),
     resume: (id) => resume(id),
@@ -412,10 +458,11 @@
         focusMode,
         changeCount: changedFiles.length,
         projectOpen: !!project,
-        canOpenProject: !(anyActive || attaching),
+        canOpenProject: !restoring,
         motion: settings?.motion === 'saving' ? 'saving' : 'expressive',
         settingsLoaded: !!settings,
-        multiAgent: !!settings?.claudeEnabled,
+        multiAgent,
+        agentName: agentLabel,
         taskRuns,
         threads,
         filePaths: [
@@ -724,22 +771,17 @@
     await tick();
     composer?.focus();
   }
-  // The dock badge counts conversations waiting on you (event-driven).
+  // The dock badge counts conversations waiting on you across all windows
+  // (event-driven); each window reports its own count.
   const attentionCount = $derived(
     attentionTasks.length + (approvals.length ? 1 : 0),
   );
   let badgeShown = 0;
   $effect(() => {
     const count = attentionCount;
-    if (count === badgeShown) return;
+    if (count === badgeShown || !isTauri()) return;
     badgeShown = count;
-    try {
-      getCurrentWindow()
-        .setBadgeCount(count || undefined)
-        .catch(() => {});
-    } catch {
-      // Not running inside the desktop app.
-    }
+    api.reportAttention(count).catch(() => {});
   });
   function toggleFocus() {
     // Panes glide away (or back) while the conversation resizes in place.
@@ -994,20 +1036,30 @@
     entries.forEach((e) => map.set(e.path, e));
     discovered = [...map.values()].slice(0, 10000);
   }
-  async function chooseProject(path?: string) {
-    if ((project && anyActive) || approvals.length || attaching) {
-      fail('Finish the current task or attachment before switching projects.');
+  /** Running work keeps a window on its project; other projects open beside it. */
+  const projectLocked = $derived(
+    !!project && (anyActive || approvals.length > 0 || attaching),
+  );
+  async function chooseProject(path?: string, inNewWindow = false) {
+    const target = path ?? (await api.pickProject());
+    if (!target || target === project?.root) return;
+    // A project has one window: bring it forward rather than open it twice.
+    const others = await api.otherWindows();
+    if (inNewWindow || projectLocked || others.projects.includes(target)) {
+      await api.newWindow(target);
       return;
     }
-    const target = path ?? (await api.pickProject());
-    if (!target || !(await protectDirty())) return;
+    if (!(await protectDirty())) return;
     persistWorkspace();
     const saved = readWorkspaces(localStorage).projects[target];
     restoring = true;
     busy = true;
     error = '';
     try {
-      project = await api.openProject(target);
+      const opened = await api.openProject(target);
+      // Opened in another window meanwhile; that window was brought forward.
+      if (opened.openElsewhere) return;
+      project = opened;
       taskRuns = {};
       threadNames = {};
       openingPrompts = {};
@@ -1067,14 +1119,11 @@
         Object.keys(connection.activeThreads ?? {})[0] ??
         connection.active?.[0] ??
         null;
-      if (
-        threadId &&
-        (harnessOf(threadId) !== 'claude' || settings?.claudeEnabled)
-      )
+      if (threadId && agentAvailable(harnessOf(threadId)))
         await resume(conversationKey(threadId));
       else {
         threadId = null;
-        selectedHarness = 'codex';
+        selectedHarness = preferredAgent();
         resetThreadSettings();
       }
       if (nextView === 'Files' && editor.active) await openFile(editor.active);
@@ -1102,6 +1151,7 @@
     if (next === selectedHarness || navigationBusy) return;
     const previous = agentLabel;
     await newTask(next);
+    rememberAgent(next);
     switchNotice = `New ${agentName(next)} conversation. Your ${previous} conversation stays in Runs.`;
   }
   async function setupCodex(harness: Harness = selectedHarness) {
@@ -1356,6 +1406,7 @@
         draft.harness ?? selectedHarness,
       );
       drafts.delete(`new:${draft.harness ?? selectedHarness}`);
+      rememberAgent(draft.harness ?? selectedHarness);
       if (!threadId) rememberOpening(result.threadId, taskPrompt);
       threadId = result.threadId;
       if (
@@ -1548,7 +1599,11 @@
     const running = liveTurn?.status === 'inProgress' ? liveTurn : turn;
     if (threadId && running?.id) await api.interrupt(threadId, running.id);
   }
-  async function newTask(nextHarness: Harness = selectedHarness) {
+  /** Starts a fresh conversation; `quiet` keeps the current view and focus. */
+  async function newTask(
+    nextHarness: Harness = selectedHarness,
+    quiet = false,
+  ) {
     if (starting || queueSending || runLoading || attaching || settingsBusy)
       return;
     stashDraft();
@@ -1580,6 +1635,7 @@
     liveTruncated = false;
     pendingUserId = '';
     loadDraft(`new:${selectedHarness}`);
+    if (quiet) return;
     view = 'Chat';
     composer?.focus();
   }
@@ -1792,6 +1848,7 @@
     if (path && settings) {
       settings.codexExecutablePath = path;
       await saveSettings();
+      await refreshAgents();
     }
   }
   function savePaneSizes() {
@@ -1849,6 +1906,11 @@
     if (e.key.toLowerCase() === 'p') {
       e.preventDefault();
       launcher = 'Files';
+    }
+    if (e.key.toLowerCase() === 'n' && e.shiftKey) {
+      e.preventDefault();
+      run(() => api.newWindow());
+      return;
     }
     if (e.key.toLowerCase() === 'n') {
       e.preventDefault();
@@ -1908,7 +1970,8 @@
     compact.addEventListener('change', updateLayout);
     let unlisten: UnlistenFn[] = [];
     let disposed = false;
-    let quitAllowed = false;
+    // This window is closing (its tasks were confirmed and are being stopped).
+    let closing = false;
     async function initialize() {
       if (!isTauri()) {
         error =
@@ -2205,15 +2268,35 @@
             error = p.message ?? 'Codex reported an error';
         },
       };
-      const results = await Promise.allSettled(
-        Object.entries(events).map(([name, handler]) =>
-          listen(`agent://${name}`, (event) => {
-            const p = event.payload as any;
-            if (!Array.isArray(p) && !acceptsEvent(p, connections)) return;
-            handler(p);
-          }),
+      // Listen only for events addressed to this window: agent events are routed
+      // to the window showing the conversation's project.
+      const target = {
+        kind: 'WebviewWindow',
+        label: getCurrentWindow().label,
+      } as const;
+      const results = await Promise.allSettled([
+        ...Object.entries(events).map(([name, handler]) =>
+          listen(
+            `agent://${name}`,
+            (event) => {
+              const p = event.payload as any;
+              if (!Array.isArray(p) && !acceptsEvent(p, connections)) return;
+              handler(p);
+            },
+            { target },
+          ),
         ),
-      );
+        // Another window changed shared preferences (appearance, motion, …).
+        listen(
+          'workbench://settings-changed',
+          () =>
+            run(async () => {
+              settings = await api.settings();
+              await refreshAgents();
+            }),
+          { target },
+        ),
+      ]);
       for (const result of results) {
         if (result.status === 'fulfilled') {
           if (disposed) result.value();
@@ -2238,38 +2321,76 @@
       if (results2[1].status === 'fulfilled')
         recordConnection(results2[1].value);
       else fail(results2[1].reason);
-      const requestQuit = async () => {
-        if (quitAllowed) return;
+      /** Confirms running tasks and unsaved files, then saves the workspace. */
+      const readyToLeave = async (title: string, question: string) => {
         if (
           anyActive &&
-          (await ask(
-            'Tasks are still running',
-            'Quit and interrupt all running tasks?',
-            ['Quit and interrupt', 'Cancel'],
-          )) !== 'Quit and interrupt'
+          (await ask('Tasks are still running', question, [
+            title,
+            'Cancel',
+          ])) !== title
+        )
+          return false;
+        const finalWorkspace = workspaceSnapshot();
+        if (!(await protectDirty())) return false;
+        persistWorkspace(finalWorkspace);
+        return true;
+      };
+      // Quitting asks each window in turn; this is this window's answer. Another
+      // window may still cancel, so agreeing leaves this window fully usable.
+      const confirmQuit = async () => {
+        let approved = closing;
+        try {
+          if (!closing)
+            approved = await readyToLeave(
+              'Quit and interrupt',
+              'Quit and interrupt all running tasks?',
+            );
+        } finally {
+          await api.quitStep(approved);
+        }
+      };
+      // Closing one of several windows closes just that window; closing the last
+      // one quits.
+      const requestClose = async () => {
+        if (closing) return;
+        const others = await api.otherWindows();
+        if (!others.count) return api.requestQuit();
+        if (
+          !(await readyToLeave(
+            'Close and stop tasks',
+            `Close this window and stop the running tasks in ${project?.displayName ?? 'this project'}?`,
+          ))
         )
           return;
-        const finalWorkspace = workspaceSnapshot();
-        if (!(await protectDirty())) return;
-        persistWorkspace(finalWorkspace);
+        closing = true;
         sessionReady = false;
-        await api.quit();
-        quitAllowed = true;
-        await getCurrentWindow().destroy();
+        await api.closeWindow();
       };
       const close = await getCurrentWindow().onCloseRequested((event) => {
         event.preventDefault();
-        run(requestQuit);
+        run(requestClose);
       });
-      const quit = await listen('workbench://quit-requested', () =>
-        run(requestQuit),
+      const quit = await listen(
+        'workbench://quit-requested',
+        () => run(confirmQuit),
+        { target },
       );
       if (disposed) {
         close();
         quit();
       } else unlisten.push(close, quit);
+      // New and restored windows are told which project to open; a new blank
+      // window starts on the welcome screen. The main window otherwise returns
+      // to the last project.
+      await refreshAgents();
       const previous = readWorkspaces(localStorage);
-      const lastProject = previous.lastProject || settings?.recentProjects[0];
+      const initial = await api.initialProject().catch(() => null);
+      const lastProject =
+        initial ??
+        (getCurrentWindow().label === 'main'
+          ? previous.lastProject || settings?.recentProjects[0]
+          : null);
       if (lastProject && !disposed) await chooseProject(lastProject);
       sessionReady = true;
     }
@@ -2316,7 +2437,7 @@
     {view}
     changeCount={changedFiles.length}
     {agentLabel}
-    multiAgent={!!settings?.claudeEnabled}
+    {multiAgent}
     {status}
     connectionType={connection.type}
     {active}
@@ -2342,20 +2463,23 @@
       returnFocus={projectTrigger}
       paths={settings?.recentProjects ?? []}
       current={project?.root ?? null}
-      blocked={anyActive || approvals.length
-        ? 'Finish running tasks before switching projects.'
-        : attaching
-          ? 'Wait for attachments to finish before switching projects.'
-          : busy || restoring || runLoading || settingsBusy
-            ? 'Wait for the current operation to finish.'
-            : ''}
-      onselect={(path) => {
+      busyHere={projectLocked}
+      elsewhere={elsewhereProjects}
+      blocked={!projectLocked &&
+      (busy || restoring || runLoading || settingsBusy)
+        ? 'Wait for the current operation to finish.'
+        : ''}
+      onselect={(path, newWindow) => {
         projectMenu = false;
-        run(() => chooseProject(path));
+        run(() => chooseProject(path, newWindow));
       }}
-      onbrowse={() => {
+      onbrowse={(newWindow) => {
         projectMenu = false;
-        run(() => chooseProject());
+        run(() => chooseProject(undefined, newWindow));
+      }}
+      onnewwindow={() => {
+        projectMenu = false;
+        run(() => api.newWindow());
       }}
       onclose={() => (projectMenu = false)}
     />{/if}
@@ -2437,7 +2561,7 @@
             {latestPlan}
             {threadId}
             title={conversationTitle}
-            agentBadge={settings?.claudeEnabled ? agentLabel : null}
+            agentBadge={multiAgent ? agentLabel : null}
             elapsedMs={elapsed}
             {taskPrompt}
             {taskSettings}
@@ -2463,6 +2587,11 @@
             signingIn={!!login}
             access={settings?.newChatAccess === 'full' ? 'full' : 'standard'}
             projectOpen={!!project}
+            claudeConnected={claudeReady}
+            onclaudeconnected={async () => {
+              settings = await api.settings();
+              await refreshAgents();
+            }}
             onsignin={beginLogin}
             onchooseexecutable={() => run(chooseExecutable)}
             onaccess={(access) => run(() => setNewChatAccess(access))}
@@ -2478,6 +2607,8 @@
             {agentLabel}
             {busy}
             canResume={!!threadId}
+            {noAgent}
+            onsetup={() => (setupOpen = true)}
             onopenproject={() => run(() => chooseProject())}
             onsuggest={(title) => {
               prompt = title;
@@ -2678,7 +2809,7 @@
               Could not open review: {String(e)}
             </p>{/await}{/if}
       {:else if view === 'Runs'}<RunsWorkspace
-          multiAgent={!!settings?.claudeEnabled}
+          {multiAgent}
           {threads}
           {turns}
           archived={archivedHistory}
@@ -2737,6 +2868,7 @@
             settings = await api.settings();
             if (!settings.claudeEnabled && selectedHarness === 'claude')
               await newTask('codex');
+            await refreshAgents();
             threads = [];
             threadCursor = null;
           }}
@@ -2911,7 +3043,7 @@
             c={{
               agentLabel,
               harness: selectedHarness,
-              multiAgent: !!settings?.claudeEnabled,
+              multiAgent,
               navigationBusy,
               attaching,
               canAttach:

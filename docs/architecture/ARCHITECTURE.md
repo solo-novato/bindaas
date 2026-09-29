@@ -463,6 +463,23 @@ Bound stdout size for pathological repositories and surface a "diff too large" s
 
 All normal project file operations require an active normalized project root.
 
+### Windows and projects
+
+Each window shows one project, and a project is open in at most one window
+(`src-tauri/src/windows.rs`). Commands resolve the project from the calling
+window, never from global state. All windows share one `codex app-server`
+process; the registry records which project each conversation belongs to
+(learned when a conversation is started, resumed, or verified) and routes every
+agent event to the window showing that project. Events without a conversation
+(connection, sign-in) go to every window. Each window listens only for events
+addressed to it.
+
+Leaving a project, closing a window, and quitting are scoped the same way:
+switching refuses only while that window's own tasks run (the UI offers a new
+window instead), closing one of several windows stops only its project's tasks,
+and quitting asks each window in turn to confirm its tasks and unsaved files.
+Projects open at quit are reopened at launch, one window each.
+
 Before read/write:
 
 1. canonicalize target where possible;
@@ -714,7 +731,8 @@ Do not impose a short generic timeout on active Codex turns.
 
 Before window/app teardown:
 
-- if a turn is active, ask before force quitting where platform UX permits;
+- if a turn is active, ask before force quitting where platform UX permits (each
+  window confirms its own tasks);
 - terminate owned child processes;
 - flush settings;
 - never orphan `codex app-server`.

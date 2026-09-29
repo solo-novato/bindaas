@@ -12,9 +12,11 @@ import type {
   FileData,
   Fingerprint,
   Entry,
+  ClaudeDetection,
   CodexDetection,
   FileMatch,
   GitSnapshot,
+  OpenedElsewhere,
   Project,
   Settings,
   Model,
@@ -36,7 +38,23 @@ export const api = {
   settings: () => invoke<Settings>('settings_get'),
   saveSettings: (value: Settings) => invoke<void>('settings_save', { value }),
   pickProject: () => invoke<string | null>('project_pick_directory'),
-  openProject: (path: string) => invoke<Project>('project_open', { path }),
+  /** Opens a project here, or returns `openElsewhere` after focusing its window. */
+  openProject: (path: string) =>
+    invoke<Project | OpenedElsewhere>('project_open', { path }),
+  /** A new window, optionally opening `path` (or focusing the window showing it). */
+  newWindow: (path?: string) => invoke<void>('window_open', { path }),
+  /** Codex: its CLI is installed. Claude: it has been connected. */
+  agentAvailability: () =>
+    invoke<{ codex: boolean; claude: boolean }>('agent_availability'),
+  detectClaude: () => invoke<ClaudeDetection>('claude_detect'),
+  initialProject: () => invoke<string | null>('window_initial_project'),
+  otherWindows: () =>
+    invoke<{ count: number; projects: string[] }>('window_others'),
+  closeWindow: () => invoke<void>('window_close'),
+  requestQuit: () => invoke<void>('app_request_quit'),
+  quitStep: (approved: boolean) => invoke<void>('app_quit_step', { approved }),
+  reportAttention: (count: number) =>
+    invoke<void>('app_report_attention', { count }),
   list: (relativePath: string, showHidden: boolean) =>
     invoke<{ entries: Entry[]; truncated: boolean }>('file_list_directory', {
       relativePath,
@@ -67,7 +85,7 @@ export const api = {
   trashEntry: (relativePath: string) =>
     invoke<void>('file_trash', { relativePath }),
   searchFiles: (query: string) =>
-    invoke<FileMatch[]>('codex_fuzzy_file_search', { query }),
+    invoke<FileMatch[]>('project_file_search', { query }),
   revertThread: (threadId: string, beforeTurnId: string) =>
     invoke('agent_revert_thread', { threadId, beforeTurnId }),
   git: () => invoke<GitSnapshot>('git_refresh'),
@@ -197,6 +215,5 @@ export const api = {
       authMethod: string | null;
     }>('agent_connect_claude', { executable }),
   disconnectClaude: () => invoke<void>('agent_disconnect_claude'),
-  quit: () => invoke('app_quit'),
   external: (url: string) => invoke<void>('open_external', { url }),
 };

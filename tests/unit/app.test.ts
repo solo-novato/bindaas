@@ -64,6 +64,7 @@ describe('launcher entries', () => {
         motion: 'expressive',
         settingsLoaded: true,
         multiAgent: false,
+        agentName: 'Codex',
         taskRuns: {
           quiet: {
             title: 'Quiet task',
@@ -91,6 +92,7 @@ describe('launcher entries', () => {
         browseFiles: noop,
         showPanel: noop,
         chooseProject: noop,
+        newWindow: noop,
         toggleMotion: noop,
         resume: noop,
         open: noop,

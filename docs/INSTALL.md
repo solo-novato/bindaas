@@ -2,22 +2,24 @@
 
 Bindaas runs on **Apple silicon Macs** (M1 or later) with **macOS 13.1 or later**.
 
-## 1. Install the Codex CLI
+## 1. Install a coding agent
 
-Bindaas drives the Codex CLI you install yourself (version **0.154.0 or later**). Pick one:
+Bindaas drives the coding agents you install yourself. You need **one** of them; with both, you pick per conversation.
+
+**Codex CLI** (version **0.154.0 or later**):
 
 ```sh
 npm install -g @openai/codex    # needs Node.js 18+
 brew install codex              # Homebrew
+codex login                     # or sign in inside Bindaas during setup
 ```
 
-Then sign in once — either inside Bindaas during setup, or in a terminal:
+**[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** (version **2.1.274 or later**):
 
 ```sh
-codex login
+npm install -g @anthropic-ai/claude-code    # or: curl -fsSL https://claude.ai/install.sh | bash
+claude auth login                           # Claude subscription or Console account
 ```
-
-Optional: install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (2.1.274 or later) and sign in with `claude auth login` to use Claude alongside Codex (enable it in **Settings → Integrations**).
 
 ## 2. Install the app
 
@@ -40,9 +42,10 @@ You only need to do this once per downloaded version.
 
 Bindaas walks you through:
 
-1. **Finding Codex.** It searches your shell's `PATH` plus Homebrew, npm (including nvm, Volta, and bun), and `~/.local/bin`. If yours lives elsewhere, choose it with **Choose Codex executable…**.
-2. **Signing in.** Use **Sign in with ChatGPT** (opens your browser) or run `codex login`, then click **I've signed in**.
-3. **Default access for new conversations.** _Standard_ (recommended) lets Codex work inside the project and ask for more; _Full access_ never asks. Change it later in **Settings → New conversations**.
+1. **Setting up a coding agent.** It looks for the Codex CLI and Claude Code in your shell's `PATH` plus Homebrew, npm (including nvm, Volta, and bun), and `~/.local/bin`, and shows install commands for whichever is missing. One is enough.
+   - **Codex:** use **Sign in with ChatGPT** (opens your browser) or run `codex login`, then click **I've signed in**. If Codex lives elsewhere, choose it with **Choose Codex executable…**.
+   - **Claude Code:** sign in with `claude auth login`, then click **Use Claude Code**.
+2. **Default access for new Codex conversations.** _Standard_ (recommended) lets Codex work inside the project and ask for more; _Full access_ never asks. Change it later in **Settings → New conversations**. Claude Code follows its own permission settings.
 
 Open a project folder to finish. You can re-run setup from **Settings → About → Run setup again**.
 

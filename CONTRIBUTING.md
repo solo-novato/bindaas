@@ -1,6 +1,6 @@
 # Contributing to Bindaas
 
-Thanks for helping! Bindaas is a small Tauri 2 app: a Svelte 5 + TypeScript frontend and a Rust core that drives the Codex CLI (and optionally Claude Code) over their local protocols. This guide gets you from clone to pull request.
+Thanks for helping! Bindaas is a small Tauri 2 app: a Svelte 5 + TypeScript frontend and a Rust core that drives the Codex CLI and/or Claude Code over their local protocols. This guide gets you from clone to pull request.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ Thanks for helping! Bindaas is a small Tauri 2 app: a Svelte 5 + TypeScript fron
 - Xcode Command Line Tools: `xcode-select --install`
 - Node.js 22.12+ or 24+
 - Rust stable via [rustup](https://rustup.rs), with `rustfmt` and `clippy` (`rustup component add rustfmt clippy`)
-- Optional, for trying real tasks: the [Codex CLI](https://github.com/openai/codex) 0.154.0+ signed in. Tests never need it.
+- Optional, for trying real tasks: the [Codex CLI](https://github.com/openai/codex) 0.154.0+ or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 2.1.274+, signed in. Tests never need either.
 
 ## Get running
 

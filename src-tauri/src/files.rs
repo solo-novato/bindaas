@@ -442,6 +442,75 @@ pub fn safe_to_open(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Ranks project paths for a typed file search (used when Codex's search is not
+/// installed): the query inside the file name first, then anywhere in the path,
+/// then its characters in order (`apsv` → `src/App.svelte`). Indices are character
+/// positions in the path, for highlighting.
+pub fn rank_paths(paths: &[String], query: &str, limit: usize) -> Vec<serde_json::Value> {
+    let needle: Vec<char> = query
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(lower)
+        .collect();
+    if needle.is_empty() {
+        return vec![];
+    }
+    let mut hits: Vec<(i64, &String, Vec<usize>)> = paths
+        .iter()
+        .filter_map(|path| score(path, &needle).map(|(s, indices)| (s, path, indices)))
+        .collect();
+    hits.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.len().cmp(&b.1.len()))
+            .then(a.1.cmp(b.1))
+    });
+    hits.into_iter()
+        .take(limit)
+        .map(|(_, path, indices)| {
+            serde_json::json!({
+                "path": path,
+                "fileName": path.rsplit('/').next().unwrap_or(path),
+                "indices": indices,
+            })
+        })
+        .collect()
+}
+
+/// One lowercase character per character, so indices stay aligned with the path.
+fn lower(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+fn score(path: &str, needle: &[char]) -> Option<(i64, Vec<usize>)> {
+    let text: Vec<char> = path.chars().map(lower).collect();
+    let name = path.rsplit('/').next().unwrap_or(path).chars().count();
+    let name_start = text.len() - name;
+    let n = needle.len();
+    let length = text.len() as i64;
+    let at = |i: usize| text[i..i + n] == *needle;
+    if text.len() >= n {
+        if let Some(i) = (name_start..=text.len() - n).find(|&i| at(i)) {
+            let prefix = if i == name_start { 200 } else { 0 };
+            return Some((3000 + prefix - length, (i..i + n).collect()));
+        }
+        if let Some(i) = (0..=text.len() - n).find(|&i| at(i)) {
+            return Some((2000 - length, (i..i + n).collect()));
+        }
+    }
+    let mut indices = Vec::with_capacity(n);
+    for (i, c) in text.iter().enumerate() {
+        if indices.len() < n && *c == needle[indices.len()] {
+            indices.push(i);
+        }
+    }
+    if indices.len() < n {
+        return None;
+    }
+    let gaps: i64 = indices.windows(2).map(|w| (w[1] - w[0] - 1) as i64).sum();
+    let in_name = indices.iter().filter(|&&i| i >= name_start).count() as i64;
+    Some((1000 + (in_name * 10).min(900) - gaps - length / 4, indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +638,42 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), d.path().join("escape")).unwrap();
         assert!(contained(&d.path().canonicalize().unwrap(), "escape").is_err());
+    }
+    #[test]
+    fn file_search_prefers_names_then_paths_then_characters_in_order() {
+        let paths: Vec<String> = [
+            "src/lib/components/MentionMenu.svelte",
+            "docs/mentions.md",
+            "src/App.svelte",
+            "src/app.css",
+            "README.md",
+        ]
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+        let names = |q: &str| -> Vec<String> {
+            rank_paths(&paths, q, 10)
+                .iter()
+                .map(|v| v["path"].as_str().unwrap().to_string())
+                .collect()
+        };
+        // File names that start with the query come first; case is ignored.
+        assert_eq!(
+            names("Mention")[..2],
+            ["docs/mentions.md", "src/lib/components/MentionMenu.svelte"]
+        );
+        assert_eq!(names("app")[..2], ["src/app.css", "src/App.svelte"]);
+        // Characters in order still match, highlighted where they matched.
+        let hit = &rank_paths(&paths, "apsv", 10)[0];
+        assert_eq!(hit["path"], "src/App.svelte");
+        assert_eq!(hit["fileName"], "App.svelte");
+        assert_eq!(hit["indices"], serde_json::json!([4, 5, 8, 9]));
+        let lib = &rank_paths(&paths, "lib/comp", 10)[0];
+        assert_eq!(
+            lib["indices"],
+            serde_json::json!([4, 5, 6, 7, 8, 9, 10, 11])
+        );
+        assert!(names("zzz").is_empty());
+        assert!(names("  ").is_empty());
     }
 }

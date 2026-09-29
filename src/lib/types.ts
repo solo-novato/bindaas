@@ -35,7 +35,10 @@ export type Project = {
   displayName: string;
   git: GitSnapshot;
   lastThreadId?: string;
+  openElsewhere?: undefined;
 };
+/** The project is already open in another window, which was brought forward. */
+export type OpenedElsewhere = { root: string; openElsewhere: true };
 export type Settings = {
   schemaVersion: number;
   claudeEnabled?: boolean;
@@ -49,6 +52,9 @@ export type Settings = {
   codexExecutablePath: string | null;
   codexIdleTimeoutSeconds: number;
   recentProjects: string[];
+  /** The agent new conversations start with: the one used last. */
+  lastAgent?: 'codex' | 'claude' | null;
+  openProjects?: string[];
   projectState: Record<string, string>;
   paneSizes: Record<string, number>;
 };
@@ -274,6 +280,13 @@ export type FileMatch = {
   path: string;
   fileName: string;
   indices: number[] | null;
+};
+/** Claude Code found on this Mac, with its sign-in state (no secrets). */
+export type ClaudeDetection = {
+  path: string;
+  version: string;
+  authenticated: boolean;
+  authMethod?: string | null;
 };
 export type CodexDetection = {
   path: string;
