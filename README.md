@@ -60,7 +60,8 @@ Then open a project folder and describe a task.
 
 - **Start a task:** open a project, type in the composer, press `⌘↵`. Choose **Code** to implement or **Plan** to discuss the approach first. With both agents set up, pick **Codex** or **Claude** in the composer; new conversations start with the one you used last.
 - **Point at files:** type `@` to find any file in the project, or right-click a file → **Add to chat**. Attach files or paste screenshots with **Attach**.
-- **Steer while it works:** sending during a task adds your message to the running turn; **Queue next** waits for it to finish.
+- **Steer while it works:** with Codex, sending during a task adds your message to the running turn. **Queue next** (then **Add to queue**) lines up follow-ups in order; Claude's Send button queues while it works.
+- **Line up the next steps:** keep up to 20 follow-ups per conversation, each with its own mode, model, attachments, and context. Expand **Task queue** to reorder, edit, or remove steps. Editing pauses the queue; **Resume queue** continues after the current turn finishes. A failed, interrupted, or disconnected task pauses remaining work for your review. **Send now** sends only the first entry and leaves a paused queue paused. Queues and unfinished edits stay with their conversation when you switch tasks, but are kept only while the window is open; closing warns before discarding queued work.
 - **Answer and approve:** questions and approvals appear above the composer. Nothing runs past a decision without you.
 - **Review:** open **Changes** to walk through each patch, mark files reviewed, or ask a scoped follow-up.
 - **Recover:** **↻ Retry** resends a failed task; **Rewrite** on your latest message removes it from the conversation and puts it back in the composer (files already changed stay as they are).

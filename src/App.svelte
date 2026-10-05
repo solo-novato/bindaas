@@ -93,6 +93,22 @@
   import WelcomeScreen from './lib/components/WelcomeScreen.svelte';
   import InspectorPane from './lib/components/InspectorPane.svelte';
   import QueueCard from './lib/components/QueueCard.svelte';
+  import {
+    appendQueue,
+    beginQueueEdit,
+    cancelQueueEdit,
+    updateQueueEdit,
+    beginQueueSend,
+    canAdvanceQueue,
+    editQueue,
+    emptyQueue,
+    finishQueueSend,
+    MAX_QUEUED_MESSAGES,
+    moveQueue,
+    pauseQueueAfterTurn,
+    removeQueue,
+    type TaskQueue,
+  } from './lib/queue';
   import ComposerControls from './lib/components/ComposerControls.svelte';
   import {
     buildLaunchEntries,
@@ -128,11 +144,12 @@
   let error = $state('');
   let busy = $state(false);
   let starting = $state(false);
+  let stopRequestedWhileStarting = false;
   let prompt = $state('');
-  let queued = $state<Draft | null>(null);
+  let taskQueues = $state<Record<string, TaskQueue>>({});
+  const noQueue = emptyQueue();
   let queueSending = $state(false);
   const pendingSteers = new Map<string, TimelineItem>();
-  let queueError = $state('');
   let queueComposerOpen = $state(false);
   let archivedHistory = $state(false);
   let conversationBusy = $state(false);
@@ -153,6 +170,7 @@
   let attachmentPreviewTrigger = $state<HTMLButtonElement>();
   let composer: HTMLTextAreaElement;
   let threadId = $state<string | null>(null);
+  const queue = $derived((threadId && taskQueues[threadId]) || noQueue);
   const connection = $derived(
     connections[
       selectedHarness === 'claude' ? (threadId ?? 'claude') : 'codex'
@@ -265,7 +283,7 @@
   let windowWidth = $state(1440);
   let windowHeight = $state(940);
   const compactQueuedComposer = $derived(
-    !!queued &&
+    queue.entries.length > 0 &&
       approvals.length > 0 &&
       windowHeight <= 760 &&
       !prompt &&
@@ -334,6 +352,7 @@
       }
     >
   >({});
+  const completedTurns = new Map<string, Set<string>>();
   const runStatusRevisions = new Map<string, number>();
   const liveRunStatuses = new Map<string, RunStatus>();
   function updateRunStatus(id: string, status: RunStatus) {
@@ -349,8 +368,6 @@
       prompt: string;
       contexts: Context[];
       attachments: Attachment[];
-      queued: Draft | null;
-      queueError?: string;
       settings?: Draft;
     }
   >();
@@ -388,6 +405,7 @@
   const navigationBusy = $derived(
     starting ||
       queueSending ||
+      !!queue.sendingId ||
       conversationBusy ||
       runLoading ||
       attaching ||
@@ -502,16 +520,12 @@
       prompt,
       contexts: [...contexts],
       attachments: [...attachments],
-      queued,
-      queueError,
       settings: currentDraft(),
     });
   }
   function loadDraft(id: string) {
     const saved = drafts.get(id);
     clearDraft();
-    queued = saved?.queued ?? null;
-    queueError = saved?.queueError ?? '';
     if (saved) {
       prompt = saved.prompt;
       contexts = saved.contexts;
@@ -520,34 +534,19 @@
     }
   }
   async function sendBackground(id: string, draft: Draft) {
-    try {
-      const context = draft.contexts
-        .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
-        .join('');
-      await api.send(
-        id,
-        draft.prompt + context,
-        draft.overrides ? draft.model || null : null,
-        draft.overrides ? draft.effort || null : null,
-        draft.overrides ? draft.mode : null,
-        draft.attachments.map((a) => a.id),
-        { permissions: null, approvalPolicy: null },
-        draft.harness ?? harnessOf(id),
-      );
-    } catch (e) {
-      const saved = drafts.get(id);
-      drafts.set(id, {
-        prompt: saved?.prompt ?? '',
-        contexts: saved?.contexts ?? [],
-        attachments: saved?.attachments ?? [],
-        queued: draft,
-      });
-      if (taskRuns[id]) taskRuns[id].error = `Follow-up not sent: ${String(e)}`;
-      if (threadId === id) {
-        queued = draft;
-        fail(e);
-      }
-    }
+    const context = draft.contexts
+      .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
+      .join('');
+    await api.send(
+      id,
+      draft.prompt + context,
+      draft.overrides ? draft.model || null : null,
+      draft.overrides ? draft.effort || null : null,
+      draft.overrides ? draft.mode : null,
+      draft.attachments.map((a) => a.id),
+      { permissions: null, approvalPolicy: null },
+      draft.harness ?? harnessOf(id),
+    );
   }
 
   const liveTurn = $derived(threadId ? taskRuns[threadId]?.turn : null);
@@ -906,21 +905,70 @@
       },
     };
   }
+  // Queue execution follows authoritative turn events, never a timer. Keep all
+  // conversations in one store so switching views cannot fork or lose a queue.
   $effect(() => {
-    if (
-      queued &&
-      !queueSending &&
-      !queueError &&
-      !active &&
-      turn?.status === 'completed'
-    ) {
-      untrack(() => {
-        const draft = queued!;
-        queued = null;
-        run(() => sendDraft(draft));
-      });
+    for (const [id, pending] of Object.entries(taskQueues)) {
+      const completed = taskRuns[id]?.turn ?? (id === threadId ? turn : null);
+      if (
+        canAdvanceQueue(pending, completed) &&
+        !(id === threadId && (active || navigationBusy))
+      )
+        untrack(() => run(() => dispatchQueued(id)));
     }
   });
+  function updateQueue(change: (value: TaskQueue) => TaskQueue) {
+    if (!threadId || navigationBusy || queue.sendingId) return;
+    taskQueues[threadId] = change(queue);
+  }
+  function updateQueueEditor(text?: string) {
+    // Typing must remain durable during unrelated attachment/settings IPC.
+    // The queue is already paused while editing, so this cannot dispatch work.
+    if (!threadId || !queue.editing) return;
+    taskQueues[threadId] =
+      text === undefined
+        ? cancelQueueEdit(queue)
+        : updateQueueEdit(queue, text);
+  }
+  function pauseTaskQueue() {
+    // Stop must win even when a send/steer acknowledgement is still in flight.
+    if (threadId && queue.entries.length)
+      taskQueues[threadId] = { ...queue, paused: true };
+  }
+  async function resumeTaskQueue() {
+    if (!threadId || navigationBusy || queue.sendingId) return;
+    const id = threadId;
+    taskQueues[id] = { ...queue, paused: false, error: '' };
+    // Explicit resume also permits retry after failure/interruption. An active
+    // turn still owns the conversation until it authoritatively completes.
+    if (!active) await dispatchQueued(id);
+  }
+  async function dispatchQueued(id: string, steer = false) {
+    const pending = taskQueues[id];
+    if (!pending?.entries.length || pending.sendingId || pending.editing)
+      return;
+    const current = taskRuns[id]?.turn ?? (id === threadId ? turn : null);
+    if (current?.status === 'inProgress' && !steer) return;
+    if (id === threadId && navigationBusy) return;
+    const entry = pending.entries[0];
+    taskQueues[id] = beginQueueSend(
+      pending,
+      steer ? pending.lastConsumedTurnId : (current?.id ?? null),
+    );
+    let failure: unknown;
+    try {
+      if (id === threadId) {
+        if (steer) await steerDraft(entry.draft, true);
+        else await sendDraft(entry.draft, true);
+      } else await sendBackground(id, entry.draft);
+    } catch (e) {
+      failure = e ?? 'The agent did not confirm delivery.';
+      if (taskRuns[id]) taskRuns[id].error = `Follow-up not sent: ${String(e)}`;
+      if (id === threadId) fail(e);
+    } finally {
+      taskQueues[id] = finishQueueSend(taskQueues[id], entry.id, failure);
+    }
+  }
   function fail(e: unknown) {
     error = String(e);
   }
@@ -1039,7 +1087,11 @@
   }
   /** Running work keeps a window on its project; other projects open beside it. */
   const projectLocked = $derived(
-    !!project && (anyActive || approvals.length > 0 || attaching),
+    !!project &&
+      (anyActive ||
+        approvals.length > 0 ||
+        attaching ||
+        Object.values(taskQueues).some((pending) => pending.entries.length)),
   );
   async function chooseProject(path?: string, inNewWindow = false) {
     const target = path ?? (await api.pickProject());
@@ -1071,12 +1123,13 @@
       historyError = '';
       titleRevisions.clear();
       runStatusRevisions.clear();
+      completedTurns.clear();
       liveRunStatuses.clear();
       readingViews.clear();
       timelineScope = 'conversation';
       drafts.clear();
       clearDraft();
-      queued = null;
+      taskQueues = {};
       taskSettings = null;
       git = project.git;
       threadId = project.lastThreadId ?? null;
@@ -1323,6 +1376,7 @@
       (!prompt.trim() && !attachments.length && !contexts.length) ||
       starting ||
       queueSending ||
+      !!queue.sendingId ||
       attaching ||
       runLoading ||
       settingsBusy ||
@@ -1331,26 +1385,25 @@
     )
       return;
     const draft = currentDraft();
-    if (active) {
-      if (!waitForNextTurn && capabilities.steer) {
+    if (active || (waitForNextTurn && threadId)) {
+      if (active && !waitForNextTurn && capabilities.steer) {
         clearDraft();
         await steerDraft(draft, false);
         return;
       }
-      if (queued)
-        throw new Error(
-          'A follow-up is already queued. Edit or remove it first.',
-        );
-      queued = draft;
+      if (!threadId) return;
+      taskQueues[threadId] = appendQueue(queue, {
+        id: crypto.randomUUID(),
+        draft: { ...draft, overrides: true },
+      });
       queueComposerOpen = false;
-      queueError = '';
       clearDraft();
       return;
     }
     clearDraft();
     await sendDraft(draft);
   }
-  async function sendDraft(draft: Draft) {
+  async function sendDraft(draft: Draft, fromQueue = false) {
     switchNotice = '';
     readingViews.follow(timelineKey);
     followRevision++;
@@ -1362,6 +1415,7 @@
       .join('');
     const full = original + context;
     starting = true;
+    stopRequestedWhileStarting = false;
     error = '';
     taskSettings = null;
     taskPrompt =
@@ -1422,39 +1476,52 @@
           ? { ...i, threadId: result.threadId, turnId: result.turn.id }
           : i,
       );
+      if (stopRequestedWhileStarting) {
+        const observed = taskRuns[result.threadId]?.turn;
+        const accepted = observed?.id === result.turn.id ? observed : turn;
+        // Delivery already succeeded. A later interrupt error must never make
+        // this message retryable or put it back at the front of the queue.
+        if (accepted?.id === result.turn.id && accepted.status === 'inProgress')
+          await run(() => api.interrupt(result.threadId, result.turn.id));
+      }
     } catch (e) {
       fail(e);
       items = items.filter((i) => i.id !== optimisticId);
-      if (!prompt && !contexts.length && !attachments.length)
-        restoreDraft(draft);
-      else queued = draft;
+      if (!fromQueue) {
+        // Failed direct sends return to the composer without disturbing queued work.
+        prompt = [draft.prompt, prompt].filter(Boolean).join('\n\n');
+        contexts = [
+          ...new Map(
+            [...draft.contexts, ...contexts].map((c) => [c.id, c]),
+          ).values(),
+        ];
+        attachments = [
+          ...new Map(
+            [...draft.attachments, ...attachments].map((a) => [a.id, a]),
+          ).values(),
+        ];
+      }
       // A failed start does not imply that other threads disconnected.
       recordConnection(
         await api.state(selectedHarness, threadId).catch(() => connection),
       );
+      if (fromQueue) throw e;
     } finally {
+      stopRequestedWhileStarting = false;
       starting = false;
     }
   }
   async function sendQueuedNow() {
-    if (!queued || queueSending || navigationBusy) return;
-    if (!active) {
-      const draft = queued;
-      queued = null;
-      queueError = '';
-      await sendDraft(draft);
+    if (!threadId || !queue.entries.length || queue.sendingId || navigationBusy)
       return;
-    }
-    if (selectedHarness === 'claude') return;
-    await steerDraft(queued, true);
+    if (active && selectedHarness === 'claude') return;
+    await dispatchQueued(threadId, active);
   }
   async function steerDraft(draft: Draft, fromQueue: boolean) {
     const id = threadId;
     const running = liveTurn?.status === 'inProgress' ? liveTurn : turn;
-    if (fromQueue) queueError = '';
     if (!id || running?.status !== 'inProgress') {
-      if (fromQueue) queued = null;
-      await sendDraft(draft);
+      await sendDraft(draft, fromQueue);
       return;
     }
     queueSending = true;
@@ -1495,7 +1562,6 @@
         draft.attachments.map((a) => a.id),
         optimisticId,
       );
-      if (fromQueue) queued = null;
       const pending = pendingSteers.get(optimisticId);
       if (pending) {
         const accepted: TimelineItem = { ...pending, delivery: 'accepted' };
@@ -1508,11 +1574,10 @@
       const unconfirmed = pendingSteers.delete(optimisticId);
       // If the matching user-message event arrived first, Codex already accepted it.
       if (!unconfirmed) {
-        if (fromQueue) queued = null;
         return;
       }
       items = items.filter((i) => i.id !== optimisticId);
-      if (fromQueue) queueError = `Message remains queued. ${String(e)}`;
+      if (fromQueue) throw e;
       else {
         // Preserve any context added while awaiting the reply, and keep Codex's current settings.
         prompt = [draft.prompt, prompt].filter(Boolean).join('\n\n');
@@ -1540,15 +1605,11 @@
     if (conversationBusy) return;
     if (action === 'archive') {
       const saved =
-        id === threadId
-          ? { prompt, attachments, contexts, queued }
-          : drafts.get(id);
+        id === threadId ? { prompt, attachments, contexts } : drafts.get(id);
       if (
-        saved &&
-        (saved.prompt ||
-          saved.attachments.length ||
-          saved.contexts.length ||
-          saved.queued)
+        taskQueues[id]?.entries.length ||
+        (saved &&
+          (saved.prompt || saved.attachments.length || saved.contexts.length))
       )
         throw new Error(
           'Send or remove this conversation’s draft and queued message before archiving.',
@@ -1568,6 +1629,7 @@
       if (action === 'rename') updateThreadName(id, name!.trim());
       if (action === 'archive') {
         delete taskRuns[id];
+        delete taskQueues[id];
         drafts.delete(id);
         if (id === threadId) await newTask();
       }
@@ -1597,15 +1659,28 @@
     await listThreads();
   }
   async function stop() {
+    pauseTaskQueue();
     const running = liveTurn?.status === 'inProgress' ? liveTurn : turn;
-    if (threadId && running?.id) await api.interrupt(threadId, running.id);
+    if (threadId && running?.status === 'inProgress') {
+      stopRequestedWhileStarting = false;
+      await api.interrupt(threadId, running.id);
+    } else if (starting) {
+      stopRequestedWhileStarting = true;
+    }
   }
   /** Starts a fresh conversation; `quiet` keeps the current view and focus. */
   async function newTask(
     nextHarness: Harness = selectedHarness,
     quiet = false,
   ) {
-    if (starting || queueSending || runLoading || attaching || settingsBusy)
+    if (
+      starting ||
+      queueSending ||
+      queue.sendingId ||
+      runLoading ||
+      attaching ||
+      settingsBusy
+    )
       return;
     stashDraft();
     const changedAgent = nextHarness !== selectedHarness;
@@ -1628,7 +1703,6 @@
     taskPrompt = '';
     liveDiff = '';
     touched = [];
-    queued = null;
     turns = [];
     turnCursor = null;
     itemCursor = null;
@@ -1685,7 +1759,14 @@
     }
   }
   async function resume(id: string) {
-    if (starting || queueSending || runLoading || attaching || settingsBusy)
+    if (
+      starting ||
+      queueSending ||
+      queue.sendingId ||
+      runLoading ||
+      attaching ||
+      settingsBusy
+    )
       return;
     if (threadId !== id) {
       stashDraft();
@@ -1999,6 +2080,11 @@
               if (entry.turn.status === 'inProgress') {
                 entry.turn = { ...entry.turn, status: 'connectionLost' };
                 updateRunStatus(id, 'connectionLost');
+                if (taskQueues[id])
+                  taskQueues[id] = pauseQueueAfterTurn(
+                    taskQueues[id],
+                    entry.turn,
+                  );
               }
             }
             if (
@@ -2097,6 +2183,16 @@
           }
         },
         'turn-completed': (p) => {
+          const seen = completedTurns.get(p.threadId) ?? new Set<string>();
+          const running = taskRuns[p.threadId]?.turn;
+          if (
+            seen.has(p.turn.id) ||
+            (running?.status === 'inProgress' && running.id !== p.turn.id)
+          )
+            return;
+          seen.add(p.turn.id);
+          if (seen.size > 200) seen.delete(seen.values().next().value!);
+          completedTurns.set(p.threadId, seen);
           updateRunStatus(
             p.threadId,
             completedRunStatus(
@@ -2110,6 +2206,11 @@
             title: taskRuns[p.threadId]?.title ?? 'Agent task',
             waiting: false,
           };
+          if (taskQueues[p.threadId])
+            taskQueues[p.threadId] = pauseQueueAfterTurn(
+              taskQueues[p.threadId],
+              p.turn,
+            );
           if (p.threadId !== threadId) {
             notify(
               p.threadId,
@@ -2128,16 +2229,6 @@
                   ? 'Interrupted'
                   : 'Failed — open to see why',
             );
-            const saved = drafts.get(p.threadId);
-            if (
-              saved?.queued &&
-              !saved.queueError &&
-              p.turn.status === 'completed'
-            ) {
-              const draft = saved.queued;
-              saved.queued = null;
-              run(() => sendBackground(p.threadId, draft));
-            }
             run(async () => {
               await Promise.allSettled([refreshGit(), checkFiles()]);
               treeVersion++;
@@ -2324,14 +2415,31 @@
       else fail(results2[1].reason);
       /** Confirms running tasks and unsaved files, then saves the workspace. */
       const readyToLeave = async (title: string, question: string) => {
-        if (
-          anyActive &&
-          (await ask('Tasks are still running', question, [
-            title,
-            'Cancel',
-          ])) !== title
-        )
-          return false;
+        const pendingCount = Object.values(taskQueues).reduce(
+          (count, pending) => count + pending.entries.length,
+          0,
+        );
+        if (anyActive || pendingCount) {
+          const message = [
+            anyActive ? question : 'Leave this window?',
+            pendingCount
+              ? `${pendingCount} queued ${pendingCount === 1 ? 'message will' : 'messages will'} be discarded. Queues are kept only while this window is open.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
+          const action = anyActive ? title : 'Discard queue and leave';
+          if (
+            (await ask(
+              anyActive
+                ? 'Tasks are still running'
+                : 'Queued tasks will be discarded',
+              message,
+              [action, 'Cancel'],
+            )) !== action
+          )
+            return false;
+        }
         const finalWorkspace = workspaceSnapshot();
         if (!(await protectDirty())) return false;
         persistWorkspace(finalWorkspace);
@@ -2910,25 +3018,24 @@
           >
             Multiple agents are working in this folder. Changes are shared.
           </p>{/if}
-        {#if queued}<QueueCard
-            {queued}
-            {queueSending}
-            {queueError}
+        {#if queue.entries.length}<QueueCard
+            {queue}
             {active}
             claude={selectedHarness === 'claude'}
             {agentLabel}
             {navigationBusy}
-            hasDraft={!!prompt || !!contexts.length || !!attachments.length}
             onsend={() => run(sendQueuedNow)}
-            onedit={() => {
-              restoreDraft(queued!);
-              queued = null;
-              queueError = '';
-            }}
-            onremove={() => {
-              queued = null;
-              queueError = '';
-            }}
+            onpause={pauseTaskQueue}
+            onresume={() => run(resumeTaskQueue)}
+            onbeginedit={(id) =>
+              updateQueue((value) => beginQueueEdit(value, id))}
+            oneditprompt={(text) => updateQueueEditor(text)}
+            oncanceledit={() => updateQueueEditor()}
+            onedit={(id, text) =>
+              updateQueue((value) => editQueue(value, id, text))}
+            onremove={(id) => updateQueue((value) => removeQueue(value, id))}
+            onmove={(id, direction) =>
+              updateQueue((value) => moveQueue(value, id, direction))}
           />{/if}
         {#if compactQueuedComposer}<button
             class="queue-compose-toggle"
@@ -3074,9 +3181,10 @@
               canConnect: !busy && !!project,
               active,
               canSteer: capabilities.steer,
+              hasQueue: queue.entries.length > 0,
               canQueue:
                 !navigationBusy &&
-                !queued &&
+                queue.entries.length < MAX_QUEUED_MESSAGES &&
                 (!!prompt.trim() || !!attachments.length || !!contexts.length),
               queueSending,
               canSend:
@@ -3086,6 +3194,7 @@
                   !!contexts.length) &&
                 !starting &&
                 !queueSending &&
+                !queue.sendingId &&
                 !attaching &&
                 !runLoading &&
                 !settingsBusy &&
@@ -3365,7 +3474,7 @@
       draft={permissionDraft}
       locked={active ||
         !!approvals.length ||
-        !!queued ||
+        queue.entries.length > 0 ||
         settingsBusy ||
         runLoading}
       onsettings={applyThreadSettings}

@@ -4,6 +4,12 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- Multi-step task queues: line up up to 20 follow-ups per conversation, reorder or edit them inline, pause/resume, and send the first step immediately. Every step retains its mode, model, effort, attachments, and context, and background conversations advance independently.
+- Queue recovery stops after a failed, interrupted, or disconnected task or an unconfirmed send. Failed entries stay in place for explicit retry, and replayed completion events cannot dispatch the same step twice.
+- Unfinished queue edits survive conversation and view switches. Queued work keeps its project window open when choosing another project, and closing or quitting warns before discarding session-only queues.
+
 ### Fixed
 
 - Quick-open search clears results from the previous query immediately, so pressing Enter while a new search is pending cannot open a stale match. Unavailable project search stops its loading indicator, and selecting a result cancels any remaining search.
