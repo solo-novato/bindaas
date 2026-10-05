@@ -4,7 +4,17 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.2.1] - Unreleased candidate
+
+### Added
+
+- On-demand file-conflict recovery: compare the local buffer and a file-scoped disk snapshot, refresh explicitly, copy the full local text, and confirm saving the local version against the reviewed fingerprint. Preview rendering is bounded; incomplete or unavailable disk previews cannot authorize replacement.
+
 ### Fixed
+
+- Failed, stale, binary, oversized, or mismatched reloads preserve unsaved file buffers. New edits typed while a save or reload is awaiting acknowledgement remain protected, including Save from a closing tab.
+- Repeated file saves are serialized per tab, comparison reads stay with their file, and late replies or errors cannot replace another tab or a new project’s state.
+- Comparing a file preserves the existing editor’s undo history and returns keyboard focus when closed. Editing pauses during a project switch so late typing cannot be discarded after the unsaved-file check.
 
 - Quick-open search clears results from the previous query immediately, so pressing Enter while a new search is pending cannot open a stale match. Unavailable project search stops its loading indicator, and selecting a result cancels any remaining search.
 
@@ -52,3 +62,4 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 [Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/solo-novato/bindaas/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/solo-novato/bindaas/releases/tag/v0.1.0
+[0.2.1]: https://github.com/solo-novato/bindaas/compare/v0.2.0...dot/safe-file-conflict-recovery
