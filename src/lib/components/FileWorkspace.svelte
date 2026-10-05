@@ -11,11 +11,18 @@
   } from '../editor.svelte';
   import { api } from '../api';
   import { ask } from '../dialog.svelte';
-  import type { Context } from '../types';
+  import type { FileSelectionCapture } from '../fileContext';
   let {
     activeTask,
-    oncontext,
-  }: { activeTask: boolean; oncontext: (context: Context) => void } = $props();
+    projectRoot,
+    onselection,
+  }: {
+    activeTask: boolean;
+    projectRoot: string;
+    onselection: (
+      capture: FileSelectionCapture & { projectRoot: string },
+    ) => void;
+  } = $props();
   const tab = $derived(currentTab());
   let compare = $state<string | null>(null);
   const loadEditor = () => import('./CodeEditor.svelte');
@@ -155,7 +162,8 @@
               </p>{:then module}<module.default
                 {tab}
                 onchange={editContent}
-                {oncontext}
+                {projectRoot}
+                {onselection}
               />{:catch error}<p class="error">{String(error)}</p>{/await}
           </div>{/if}
         {#if tab.mode !== 'edit' && markdownComponent}{#await markdownComponent}<p

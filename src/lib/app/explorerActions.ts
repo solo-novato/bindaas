@@ -1,4 +1,5 @@
 import { api } from '../api';
+import { createFileReference } from '../fileContext';
 import { ask } from '../dialog.svelte';
 import { closeTab, editor, openFile } from '../editor.svelte';
 import {
@@ -22,7 +23,7 @@ export type ExplorerContext = {
   expanded: () => string[];
   setExpanded: (paths: string[]) => void;
   open: (path: string) => Promise<void>;
-  addContext: (context: Context) => void;
+  addContext: (context: Context) => boolean | void;
   fail: (message: string) => void;
 };
 
@@ -66,12 +67,13 @@ export function createExplorerActions(ctx: ExplorerContext) {
         );
         return noteExplorer('Path copied');
       case 'add-chat':
-        ctx.addContext({
-          id: crypto.randomUUID(),
-          label: entry.path,
-          text: `${entry.directory ? 'Folder' : 'File'}: ${entry.path}`,
-        });
-        return noteExplorer(`Added ${name} to your message`);
+        if (
+          ctx.addContext(
+            createFileReference(root, entry.path, entry.directory),
+          ) === false
+        )
+          return;
+        return noteExplorer(`Added ${name} as a file reference`);
       case 'rename': {
         const dirty = dirtyWithin(entry.path);
         if (dirty)

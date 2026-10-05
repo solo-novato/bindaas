@@ -4,8 +4,13 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- Explicit file context: choose a lightweight disk reference or a frozen snapshot of the current editor, including unsaved text. Preview/copy the exact payload, refresh full-file snapshots deliberately, and add exact selected ranges. Bounded captures stay frozen through edits, queued sends, and send failures without reading or saving files in the background.
+
 ### Fixed
 
+- Selection context keeps its original file and exact range, including selections ending at the next line's start; disjoint selections on one line no longer replace each other.
 - Quick-open search clears results from the previous query immediately, so pressing Enter while a new search is pending cannot open a stale match. Unavailable project search stops its loading indicator, and selecting a result cancels any remaining search.
 
 ### Security
