@@ -20,6 +20,7 @@
   } from './lib/workspace';
   import {
     editor,
+    resetEditor,
     openFile,
     saveTab,
     closeTab,
@@ -1042,18 +1043,22 @@
     !!project && (anyActive || approvals.length > 0 || attaching),
   );
   async function chooseProject(path?: string, inNewWindow = false) {
+    if (restoring) return;
     const target = path ?? (await api.pickProject());
     if (!target || target === project?.root) return;
     // A project has one window: bring it forward rather than open it twice.
     const others = await api.otherWindows();
+    if (restoring) return;
     if (inNewWindow || projectLocked || others.projects.includes(target)) {
       await api.newWindow(target);
       return;
     }
-    if (!(await protectDirty())) return;
+    if (!(await protectDirty()) || restoring) return;
     persistWorkspace();
     const saved = readWorkspaces(localStorage).projects[target];
     restoring = true;
+    treeMenu = null;
+    launcher = null;
     busy = true;
     error = '';
     try {
@@ -1090,8 +1095,7 @@
       touched = [];
       selectedPath = '';
       baseline = [];
-      editor.tabs = [];
-      editor.active = '';
+      resetEditor();
       discovered = [];
       treeVersion++;
       view = 'Chat';
@@ -1891,6 +1895,10 @@
       if (dialog.resolve) answer('Cancel');
       return;
     }
+    if (restoring) {
+      if (e.metaKey || e.ctrlKey) e.preventDefault();
+      return;
+    }
     if (!e.metaKey && !e.ctrlKey) return;
     if (['1', '2', '3', '4'].includes(e.key)) {
       e.preventDefault();
@@ -2398,7 +2406,7 @@
     run(initialize);
     window.addEventListener('keydown', shortcut);
     const focus = () => {
-      if (project) run(checkFiles);
+      if (project && !restoring) run(checkFiles);
     };
     window.addEventListener('focus', focus);
     const flushWorkspace = () => {
@@ -2451,7 +2459,8 @@
       queueSending ||
       runLoading ||
       attaching ||
-      settingsBusy}
+      settingsBusy ||
+      restoring}
     onproject={() => (projectMenu = !projectMenu)}
     onnavigate={(tab) => run(() => navigate(tab))}
     onlauncher={() => (launcher = 'All')}
@@ -2493,8 +2502,12 @@
         onclick={() => (error = '')}>×</button
       >
     </div>{/if}
+  {#if restoring}<div class="banner" role="status">
+      Opening your project… Editing is paused until it is ready.
+    </div>{/if}
   <div
     class="work-area"
+    inert={restoring}
     style={`--left-width:${displayedLeftWidth}px;--right-width:${displayedRightWidth}px`}
   >
     {#if leftOpen && !focusMode && view !== 'Changes' && view !== 'Runs' && view !== 'Settings'}<ExplorerPane
@@ -2550,9 +2563,6 @@
         </div>
       {/if}
       {#if view === 'Chat'}
-        {#if restoring}<div class="banner" role="status">
-            Restoring your workspace…
-          </div>{/if}
         {#if turn || starting}<TaskHeader
             {turn}
             {starting}

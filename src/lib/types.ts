@@ -189,6 +189,9 @@ export type Tab = {
   editing: boolean;
   mode: 'edit' | 'preview' | 'split';
   conflict?: string;
+  /** Includes confirmation and the pending write/read; typing remains allowed. */
+  saving?: boolean;
+  reloading?: boolean;
   cursor: number;
   scroll: number;
 };
