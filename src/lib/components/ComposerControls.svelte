@@ -69,6 +69,7 @@
     >
     <button
       class="context-button"
+      aria-label="Add file context for current editor"
       disabled={!c.canAddContext}
       onclick={onaddcontext}><Icon name="plus" size={14} /> Context</button
     >

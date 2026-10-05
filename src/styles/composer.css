@@ -658,3 +658,9 @@ main > .composer-area .composer-inner {
 .queue-card {
   animation: rise-in 360ms var(--ease-spring);
 }
+
+.context-kind {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}

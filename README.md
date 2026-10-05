@@ -60,6 +60,7 @@ Then open a project folder and describe a task.
 
 - **Start a task:** open a project, type in the composer, press `⌘↵`. Choose **Code** to implement or **Plan** to discuss the approach first. With both agents set up, pick **Codex** or **Claude** in the composer; new conversations start with the one you used last.
 - **Point at files:** type `@` to find any file in the project, or right-click a file → **Add to chat**. Attach files or paste screenshots with **Attach**.
+- **Share the editor's actual text:** open a file and choose **Context** → **Editor snapshot** to include its current text, including unsaved edits, without saving it. **File reference** only points at disk. Select text in the editor and choose **Add selection to message** for a smaller excerpt. Open a context chip to inspect or copy the exact payload, remove it, or explicitly refresh a full-file snapshot from the open editor. Snapshots stay frozen through later edits and queued sends; they never refresh automatically. Each snapshot is limited to 64 KiB including its source header, with up to four snapshots / 128 KiB total and 16 file references per draft. Oversized captures are refused rather than truncated.
 - **Steer while it works:** sending during a task adds your message to the running turn; **Queue next** waits for it to finish.
 - **Answer and approve:** questions and approvals appear above the composer. Nothing runs past a decision without you.
 - **Review:** open **Changes** to walk through each patch, mark files reviewed, or ask a scoped follow-up.

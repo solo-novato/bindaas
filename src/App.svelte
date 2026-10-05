@@ -5,6 +5,14 @@
   import { isTauri } from '@tauri-apps/api/core';
   import { api } from './lib/api';
   import {
+    addFileContext,
+    assertFileContextDraft,
+    createEditorSnapshot,
+    createFileReference,
+    createSelectionContext,
+    type FileSelectionCapture,
+  } from './lib/fileContext';
+  import {
     agentName,
     harnessOf,
     connectionKey,
@@ -149,6 +157,28 @@
   let taskSettings = $state<ThreadSettings | null>(null);
   let contexts = $state<Context[]>([]);
   let contextPreview = $state<Context | null>(null);
+  let contextPreviewScope = '';
+  let contextPreviewTrigger = $state<HTMLElement>();
+  type FileContextRequest = {
+    scope: string;
+    path: string;
+    reference: Context;
+    snapshot: Context | null;
+    snapshotError: string;
+    dirty: boolean;
+    trigger?: HTMLElement;
+  };
+  let fileContextRequest = $state<FileContextRequest | null>(null);
+  const loadFileContextPicker = () =>
+    import('./lib/components/FileContextPicker.svelte');
+  let fileContextModule = $state<ReturnType<
+    typeof loadFileContextPicker
+  > | null>(null);
+  const loadContextPreview = () =>
+    import('./lib/components/ContextPreview.svelte');
+  let contextPreviewModule = $state<ReturnType<
+    typeof loadContextPreview
+  > | null>(null);
   let attachmentPreview = $state<Attachment | null>(null);
   let attachmentPreviewTrigger = $state<HTMLButtonElement>();
   let composer: HTMLTextAreaElement;
@@ -521,6 +551,7 @@
   }
   async function sendBackground(id: string, draft: Draft) {
     try {
+      assertFileContextDraft(draft.contexts, project?.root ?? '');
       const context = draft.contexts
         .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
         .join('');
@@ -939,10 +970,162 @@
       ? path.slice(project.root.length + 1)
       : path;
   }
-  function addContext(context: Context) {
-    contexts = [...contexts, context];
-    composer?.focus();
+  function contextScope() {
+    return JSON.stringify([
+      project?.root ?? null,
+      threadId ?? 'new',
+      selectedHarness,
+    ]);
   }
+  function contextTargetMatches(context: Context) {
+    return (
+      !context.file ||
+      (!!project &&
+        context.file.projectRoot === (project.root.replace(/\/+$/, '') || '/'))
+    );
+  }
+  function addContext(context: Context) {
+    try {
+      if (!contextTargetMatches(context))
+        throw new Error(
+          'This file context belongs to another project. Add it again from the active project.',
+        );
+      contexts = context.file
+        ? addFileContext(contexts, context)
+        : [...contexts, context];
+      composer?.focus();
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+  function addEditorSelection(
+    capture: FileSelectionCapture & { projectRoot: string },
+  ) {
+    if (!project || navigationBusy) return;
+    if (
+      capture.projectRoot !== project.root ||
+      currentTab()?.path !== capture.path
+    ) {
+      fail('The selection belongs to another file. Select the text again.');
+      return;
+    }
+    try {
+      addContext(createSelectionContext(project.root, capture));
+    } catch (e) {
+      fail(e);
+    }
+  }
+  function openFileContext() {
+    const tab = currentTab();
+    if (!project || !tab || navigationBusy) return;
+    let snapshot: Context | null = null;
+    let snapshotError = '';
+    try {
+      snapshot = createEditorSnapshot(project.root, tab);
+    } catch (e) {
+      snapshotError = String(e);
+    }
+    fileContextRequest = {
+      scope: contextScope(),
+      path: tab.path,
+      reference: createFileReference(project.root, tab.path),
+      snapshot,
+      snapshotError,
+      dirty: tab.dirty,
+      trigger: document.activeElement as HTMLElement,
+    };
+    fileContextModule ??= loadFileContextPicker();
+  }
+  function dismissContextPlaceholder(kind: 'picker' | 'preview') {
+    const trigger =
+      kind === 'picker' ? fileContextRequest?.trigger : contextPreviewTrigger;
+    if (kind === 'picker') fileContextRequest = null;
+    else contextPreview = null;
+    tick().then(() => {
+      if (!document.querySelector('dialog[open]') && trigger?.isConnected)
+        trigger.focus();
+    });
+  }
+  function commitFileContext(context: Context): string | null {
+    if (
+      !fileContextRequest ||
+      fileContextRequest.scope !== contextScope() ||
+      !contextTargetMatches(context)
+    )
+      return 'This draft changed while context was open. Close this dialog and add it again.';
+    if (navigationBusy)
+      return 'Wait for the current operation to finish, then add the context.';
+    try {
+      contexts = addFileContext(contexts, context);
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+  function previewContext(context: Context, trigger: HTMLElement) {
+    contextPreviewScope = contextScope();
+    contextPreviewTrigger = trigger;
+    contextPreview = context;
+    contextPreviewModule ??= loadContextPreview();
+  }
+  const canUpdateContext = $derived(
+    !!contextPreview?.file &&
+      contextPreview.file.kind !== 'selection' &&
+      contextPreviewScope === contextScope() &&
+      contextTargetMatches(contextPreview) &&
+      !contextPreview.file.directory &&
+      !navigationBusy &&
+      currentTab()?.path === contextPreview.file.path &&
+      currentTab()?.data?.encoding === 'utf8' &&
+      currentTab()?.content !== undefined,
+  );
+  const contextUpdateHint = $derived(
+    contextPreview?.file?.kind === 'selection'
+      ? 'Selection snapshots stay frozen. Select the new text in the editor to replace this range.'
+      : contextPreview?.file?.directory
+        ? 'Folder references contain no file text.'
+        : canUpdateContext
+          ? 'This uses the version currently open in the editor. It does not read or save disk.'
+          : 'Open this text file in the editor to capture its current contents. No disk read happens automatically.',
+  );
+  function updatePreviewContext(): string | null {
+    const before = contextPreview;
+    const tab = currentTab();
+    if (
+      !before ||
+      !canUpdateContext ||
+      !project ||
+      !tab ||
+      contexts.find((context) => context.id === before.id) !== before
+    )
+      return 'This context or editor changed. Reopen the context before updating it.';
+    try {
+      const next = createEditorSnapshot(project.root, tab);
+      const updated = addFileContext(
+        contexts.filter((context) => context.id !== before.id),
+        next,
+      );
+      contexts = updated;
+      // Reuse the stored state proxy so consecutive refreshes compare the same attachment.
+      contextPreview = contexts.find((context) => context.id === next.id)!;
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+  $effect(() => {
+    const scope = contextScope();
+    if (fileContextRequest && fileContextRequest.scope !== scope)
+      fileContextRequest = null;
+    if (
+      contextPreview &&
+      (contextPreviewScope !== scope ||
+        !contexts.some((context) => context.id === contextPreview?.id))
+    )
+      contextPreview = null;
+  });
   function prepareReview(context: Context, question: string) {
     prompt = prompt.trim() ? `${prompt}\n\n${question}` : question;
     addContext(context);
@@ -1331,6 +1514,7 @@
     )
       return;
     const draft = currentDraft();
+    assertFileContextDraft(draft.contexts, project.root);
     if (active) {
       if (!waitForNextTurn && capabilities.steer) {
         clearDraft();
@@ -1394,6 +1578,7 @@
     ].slice(-400);
     approvals = [];
     try {
+      assertFileContextDraft(draft.contexts, project?.root ?? '');
       const result = await api.send(
         threadId,
         full,
@@ -1485,6 +1670,7 @@
     readingViews.follow(timelineKey);
     followRevision++;
     try {
+      assertFileContextDraft(draft.contexts, project?.root ?? '');
       const context = draft.contexts
         .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
         .join('');
@@ -1878,6 +2064,8 @@
   function shortcut(e: KeyboardEvent) {
     if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
     if (e.key === 'Escape') {
+      if (fileContextRequest) dismissContextPlaceholder('picker');
+      if (contextPreview) dismissContextPlaceholder('preview');
       if (findOpen) tick().then(() => timeline?.focusReader());
       findOpen = false;
       findQuery = '';
@@ -2774,7 +2962,8 @@
               ></span>
             </div>{:then module}<module.default
               activeTask={active}
-              oncontext={addContext}
+              projectRoot={project?.root ?? ''}
+              onselection={addEditorSelection}
             />{:catch e}<p class="error">{String(e)}</p>{/await}{/if}
       {:else if view === 'Changes'}{#if reviewModule}{#await reviewModule}<div
               class="view-skeleton"
@@ -2983,8 +3172,13 @@
                 ><button
                   class="context-label"
                   aria-label={`Preview context ${context.label}`}
-                  onclick={() => (contextPreview = context)}
-                  >{context.label}</button
+                  onclick={(event) =>
+                    previewContext(context, event.currentTarget)}
+                  >{context.label}{#if context.file}<small class="context-kind"
+                      >{context.file.kind === 'reference'
+                        ? 'reference'
+                        : 'frozen'}</small
+                    >{/if}</button
                 ><button
                   aria-label={`Remove ${context.label}`}
                   onclick={() =>
@@ -3049,7 +3243,7 @@
               attaching,
               canAttach:
                 !!project && !starting && !attaching && attachments.length < 8,
-              canAddContext: !!currentTab() && !starting,
+              canAddContext: !!currentTab() && !navigationBusy,
               canChangePermissions:
                 !!project && !starting && !runLoading && !restoring,
               permissionsLabel:
@@ -3093,15 +3287,7 @@
                 !restoring,
             }}
             onattach={() => run(attachFiles)}
-            onaddcontext={() => {
-              const tab = currentTab();
-              if (tab)
-                addContext({
-                  id: crypto.randomUUID(),
-                  label: tab.path,
-                  text: `File: ${tab.path}`,
-                });
-            }}
+            onaddcontext={openFileContext}
             onharness={(next) => run(() => switchHarness(next))}
             onpermissions={() => (sessionPanel = 'permissions')}
             onmode={(next) => run(() => changeThreadSettings({ mode: next }))}
@@ -3374,32 +3560,88 @@
     />{/key}
 {/if}
 
-{#if contextPreview}<dialog
-    use:activateDialog
-    class="modal context-preview"
-    aria-label="Context preview"
-    oncancel={() => (contextPreview = null)}
-  >
-    <div class="context-preview-heading">
-      <div>
-        <span class="eyebrow">INCLUDED IN YOUR MESSAGE</span>
-        <h2>{contextPreview.label}</h2>
-      </div>
-      <button
-        aria-label="Close context preview"
-        onclick={() => (contextPreview = null)}>×</button
+{#if fileContextRequest && fileContextModule}
+  {#await fileContextModule}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Add file context"
+      oncancel={() => dismissContextPlaceholder('picker')}
+    >
+      <p>Opening file context…</p>
+      <button tabindex="0" onclick={() => dismissContextPlaceholder('picker')}
+        >Cancel</button
       >
-    </div>
-    <pre>{contextPreview.text.slice(0, 30000)}</pre>
-    <footer>
-      <span
-        >{contextPreview.text.length.toLocaleString()} characters{contextPreview
-          .text.length > 30000
-          ? ' · preview shortened'
-          : ''}</span
-      ><button onclick={() => (contextPreview = null)}>Back to message</button>
-    </footer>
-  </dialog>{/if}
+    </dialog>
+  {:then module}<module.default
+      path={fileContextRequest.path}
+      reference={fileContextRequest.reference}
+      snapshot={fileContextRequest.snapshot}
+      snapshotError={fileContextRequest.snapshotError}
+      dirty={fileContextRequest.dirty}
+      existingIds={contexts.map((context) => context.id)}
+      returnFocus={fileContextRequest.trigger}
+      onadd={commitFileContext}
+      onclose={() => (fileContextRequest = null)}
+    />
+  {:catch e}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Add file context"
+      oncancel={() => dismissContextPlaceholder('picker')}
+    >
+      <p class="error" role="alert">{String(e)}</p>
+      <button
+        tabindex="0"
+        onclick={() => (fileContextModule = loadFileContextPicker())}
+        >Retry</button
+      ><button tabindex="0" onclick={() => dismissContextPlaceholder('picker')}
+        >Cancel</button
+      >
+    </dialog>{/await}
+{/if}
+
+{#if contextPreview && contextPreviewModule}
+  {#await contextPreviewModule}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Context preview"
+      oncancel={() => dismissContextPlaceholder('preview')}
+    >
+      <p>Opening context…</p>
+      <button tabindex="0" onclick={() => dismissContextPlaceholder('preview')}
+        >Back to message</button
+      >
+    </dialog>
+  {:then module}<module.default
+      context={contextPreview}
+      canUpdate={canUpdateContext}
+      updateHint={contextUpdateHint}
+      returnFocus={contextPreviewTrigger}
+      onupdate={updatePreviewContext}
+      onremove={() => {
+        contexts = contexts.filter(
+          (context) => context.id !== contextPreview?.id,
+        );
+        contextPreview = null;
+      }}
+      onclose={() => (contextPreview = null)}
+    />
+  {:catch e}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Context preview"
+      oncancel={() => dismissContextPlaceholder('preview')}
+    >
+      <p class="error" role="alert">{String(e)}</p>
+      <button
+        tabindex="0"
+        onclick={() => (contextPreviewModule = loadContextPreview())}
+        >Retry</button
+      ><button tabindex="0" onclick={() => dismissContextPlaceholder('preview')}
+        >Back to message</button
+      >
+    </dialog>{/await}
+{/if}
 
 {#if attachmentPreview}
   {#key attachmentPreview.id}<AttachmentPreview
