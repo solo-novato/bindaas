@@ -4,6 +4,8 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.3.0] - Unreleased candidate
+
 ### Added
 
 - Multi-step task queues: line up up to 20 follow-ups per conversation, reorder or edit them inline, pause/resume, and send the first step immediately. Every step retains its mode, model, effort, attachments, and context, and background conversations advance independently.
@@ -56,5 +58,6 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 - "Open in default app" refuses apps, scripts, installers, link files, and executables.
 
 [Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/solo-novato/bindaas/compare/v0.2.0...dot/multi-step-task-queue
 [0.2.0]: https://github.com/solo-novato/bindaas/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/solo-novato/bindaas/releases/tag/v0.1.0
