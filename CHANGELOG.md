@@ -8,6 +8,10 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 - Quick-open search clears results from the previous query immediately, so pressing Enter while a new search is pending cannot open a stale match. Unavailable project search stops its loading indicator, and selecting a result cancels any remaining search.
 
+### Security
+
+- Update the locked transitive `devalue` dependency to 5.9.3 to address its published security advisories.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
