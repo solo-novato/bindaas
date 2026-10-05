@@ -4,6 +4,10 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+- Quick-open search clears results from the previous query immediately, so pressing Enter while a new search is pending cannot open a stale match. Unavailable project search stops its loading indicator, and selecting a result cancels any remaining search.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added

@@ -477,6 +477,7 @@
   );
   async function selectDestination(entry: LaunchEntry) {
     launcher = null;
+    launcherSearch.reset();
     await tick();
     await run(async () => entry.run());
   }
