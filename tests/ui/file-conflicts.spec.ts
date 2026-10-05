@@ -909,6 +909,10 @@ test('a pending project switch pauses editing and shortcuts, then restores the o
     )
     .toBe('function');
   await expect(page.locator('.work-area')).toHaveAttribute('inert', '');
+  await expect(page.locator('.project-button')).toBeDisabled();
+  await expect(
+    page.getByRole('dialog', { name: 'Switch project', exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole('status').filter({ hasText: 'Opening your project…' }),
   ).toContainText('Editing is paused until it is ready');
@@ -922,6 +926,10 @@ test('a pending project switch pauses editing and shortcuts, then restores the o
     .evaluate((element) => (element as HTMLElement).focus());
   await expect(page.locator('.cm-content')).not.toBeFocused();
   await page.keyboard.type('This must not enter the old buffer');
+  await expect(page.locator('.project-button')).toBeDisabled();
+  await expect(
+    page.getByRole('dialog', { name: 'Switch project', exact: true }),
+  ).toHaveCount(0);
   await page.keyboard.press('Meta+s');
   await page.keyboard.press('Meta+w');
   await page.keyboard.press('Meta+p');
@@ -947,6 +955,10 @@ test('a pending project switch pauses editing and shortcuts, then restores the o
     'The new project is unavailable',
   );
   await expect(page.locator('.work-area')).not.toHaveAttribute('inert');
+  await expect(page.locator('.project-button')).toBeEnabled();
+  await expect(
+    page.getByRole('dialog', { name: 'Switch project', exact: true }),
+  ).toHaveCount(0);
   await expect(page.locator('.project-button')).toContainText(
     'fixture-project',
   );

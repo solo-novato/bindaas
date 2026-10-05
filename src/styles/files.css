@@ -213,6 +213,12 @@
   font-size: var(--fs-xs);
 }
 .compare-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding-block: 5px;
+  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   font-size: var(--fs-xs);
 }

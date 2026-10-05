@@ -208,7 +208,7 @@ describe('safe disk reload', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it('reloads only the captured tab without navigating back from another tab', async () => {
+  it('releases a successful background reload while preserving metadata and navigation', async () => {
     const target = tab({ dirty: false, content: 'original\n' });
     const result = deferred<FileData>();
     read.mockReturnValue(result.promise);
@@ -221,12 +221,36 @@ describe('safe disk reload', () => {
     });
     await openFile(other.path);
     editor.error = 'An error belonging to b.txt';
-    result.resolve(file('fresh disk'));
+    const disk = file('fresh disk', { fingerprint: fingerprint('fresh') });
+    result.resolve(disk);
     expect(await pending).toBe(true);
     expect(currentTab()).toBe(other);
     expect(other.content).toBe('b');
-    expect(target.content).toBe('fresh disk');
+    expect(target.content).toBeUndefined();
+    expect(target.data).toEqual({ ...disk, content: null });
+    expect(target.dirty).toBe(false);
     expect(editor.error).toBe('An error belonging to b.txt');
+  });
+
+  it('retains newer dirty text when an obsolete background reload settles', async () => {
+    const target = tab({
+      dirty: false,
+      content: 'original\n',
+      conflict: undefined,
+    });
+    const baseline = target.data;
+    const result = deferred<FileData>();
+    read.mockReturnValue(result.promise);
+    const pending = reloadTab(target);
+    editContent('newer local text');
+    const other = tab({ path: 'b.txt', data: file('b', { path: 'b.txt' }) });
+    await openFile(other.path);
+    result.resolve(file('fresh disk'));
+    expect(await pending).toBe(false);
+    expect(target.content).toBe('newer local text');
+    expect(target.dirty).toBe(true);
+    expect(target.data).toBe(baseline);
+    expect(currentTab()).toBe(other);
   });
 
   it('ignores a read for a closed or replaced same-path tab', async () => {
@@ -386,6 +410,118 @@ describe('safe saves', () => {
     expect(target.content).toBe('original\n');
     expect(target.dirty).toBe(true);
   });
+
+  it.each(['ordinary', 'compared'])(
+    'releases clean inactive text immediately after a successful %s save ACK',
+    async (operation) => {
+      const target = tab();
+      const ack = deferred<FileData>();
+      confirm.mockResolvedValue('Save my version');
+      save.mockReturnValue(ack.promise);
+      const pending =
+        operation === 'ordinary'
+          ? saveTab(target)
+          : saveComparedTab(target, file('external'));
+      await Promise.resolve();
+      const other = tab({
+        path: 'b.txt',
+        data: file('b', { path: 'b.txt' }),
+        content: 'b',
+        dirty: false,
+      });
+      await openFile(other.path);
+      expect(target.content).toBe('local\n');
+      const saved = file('local\n', { fingerprint: fingerprint('saved') });
+      ack.resolve(saved);
+      expect(await pending).toBe(operation === 'ordinary' ? true : 'saved');
+      expect(target.content).toBeUndefined();
+      expect(target.data).toEqual({ ...saved, content: null });
+      expect(target.dirty).toBe(false);
+      expect(target.conflict).toBeUndefined();
+      expect(target.cursor).toBe(4);
+      expect(target.scroll).toBe(12);
+      expect(currentTab()).toBe(other);
+      expect(other.content).toBe('b');
+    },
+  );
+
+  it.each(['ordinary', 'compared'])(
+    'retains text when reopening between the %s write ACK and the saving flag cleanup',
+    async (operation) => {
+      const target = tab();
+      const ack = deferred<FileData>();
+      confirm.mockResolvedValue('Save my version');
+      save.mockReturnValue(ack.promise);
+      const pending =
+        operation === 'ordinary'
+          ? saveTab(target)
+          : saveComparedTab(target, file('external'));
+      await Promise.resolve();
+      const other = tab({
+        path: 'b.txt',
+        data: file('b', { path: 'b.txt' }),
+        content: 'b',
+        dirty: false,
+      });
+      await openFile(other.path);
+      const saved = file('local\n', { fingerprint: fingerprint('saved') });
+      let reopened: Promise<void> | undefined;
+      ack.resolve(saved);
+      // writeTab resumes first; this open runs before its caller's finally.
+      queueMicrotask(() => {
+        reopened = openFile(target.path);
+      });
+      expect(await pending).toBe(operation === 'ordinary' ? true : 'saved');
+      await reopened;
+      expect(currentTab()).toBe(target);
+      expect(target.saving).toBe(false);
+      expect(target.content).toBe('local\n');
+      expect(target.data).toEqual(saved);
+      expect(target.dirty).toBe(false);
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains newer dirty text and its saved baseline after a background save ACK', async () => {
+    const target = tab();
+    const ack = deferred<FileData>();
+    save.mockReturnValue(ack.promise);
+    const pending = saveTab(target);
+    editContent('newer local text');
+    const other = tab({ path: 'b.txt', data: file('b', { path: 'b.txt' }) });
+    await openFile(other.path);
+    const saved = file('local\n', { fingerprint: fingerprint('saved') });
+    ack.resolve(saved);
+    expect(await pending).toBe(true);
+    expect(target.content).toBe('newer local text');
+    expect(target.data).toEqual(saved);
+    expect(target.dirty).toBe(true);
+    expect(currentTab()).toBe(other);
+  });
+
+  it.each(['save', 'reload'])(
+    'retains active contents when a newer open changes only the request generation during %s',
+    async (operation) => {
+      const target = tab({
+        dirty: false,
+        content: 'original\n',
+        conflict: undefined,
+      });
+      const result = deferred<FileData>();
+      save.mockReturnValue(result.promise);
+      read.mockReturnValue(result.promise);
+      const pending =
+        operation === 'save' ? saveTab(target) : reloadTab(target);
+      await openFile(target.path);
+      const disk = file('original\n', { fingerprint: fingerprint('fresh') });
+      result.resolve(disk);
+      expect(await pending).toBe(true);
+      expect(currentTab()).toBe(target);
+      expect(target.content).toBe('original\n');
+      expect(target.data).toEqual(disk);
+      expect(target.dirty).toBe(false);
+    },
+  );
 
   it('preserves baseline, buffer, and dirtiness on rejected writes', async () => {
     const target = tab();

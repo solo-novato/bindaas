@@ -124,10 +124,9 @@
         what to keep.
       </p>
     </div>
-    <button onclick={onclose} aria-label="Close comparison"
-      ><Icon name="close" size={15} />Close comparison</button
-    >
   </header>
+  <!-- Explicit tab stops keep recovery controls reachable in macOS WebKit,
+       including when the system's general keyboard-navigation setting is off. -->
   <div class="compare-toolbar">
     <span class="muted"
       >{loading
@@ -140,10 +139,13 @@
             : 'Disk snapshot · refresh if the agent edits again'
           : 'No safe disk snapshot available'}</span
     >
-    <button disabled={busy} onclick={refreshDisk}
+    <button tabindex="0" onclick={onclose} aria-label="Close comparison"
+      ><Icon name="close" size={15} />Close comparison</button
+    >
+    <button tabindex="0" disabled={busy} onclick={refreshDisk}
       ><Icon name="refresh" size={14} />Refresh disk</button
     >
-    <button onclick={copyLocal}>Copy my text</button>
+    <button tabindex="0" onclick={copyLocal}>Copy my text</button>
   </div>
   {#if failure}<p class="compare-notice error" role="alert">{failure}</p>{/if}
   {#if copyStatus}<p class="compare-notice" role="status">{copyStatus}</p>{/if}
@@ -203,9 +205,11 @@
       Saving your version replaces only the disk snapshot you reviewed. A newer
       disk change will block the save.
     </p>
-    <button disabled={busy} onclick={onclose}>Keep editing</button>
-    <button disabled={busy || loading} onclick={useDisk}>Reload disk</button>
-    <button class="primary" disabled={!canSave} onclick={saveLocal}
+    <button tabindex="0" disabled={busy} onclick={onclose}>Keep editing</button>
+    <button tabindex="0" disabled={busy || loading} onclick={useDisk}
+      >Reload disk</button
+    >
+    <button tabindex="0" class="primary" disabled={!canSave} onclick={saveLocal}
       >{tab.saving ? 'Saving…' : 'Save my version…'}</button
     >
   </footer>

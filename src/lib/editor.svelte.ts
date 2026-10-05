@@ -46,6 +46,12 @@ function snapshot(tab: Tab) {
       live(tab, path) && currentTab() === tab && opening === ticket,
   };
 }
+function releaseCleanInactive(tab: Tab) {
+  if (currentTab() !== tab && !tab.dirty) {
+    tab.content = undefined;
+    if (tab.data) tab.data = { ...tab.data, content: null };
+  }
+}
 function requireText(
   data: FileData,
   path: string,
@@ -155,15 +161,18 @@ export async function saveTab(tab = currentTab()): Promise<boolean> {
     return false;
   const scope = snapshot(tab);
   tab.saving = true;
+  let saved = false;
   try {
     requireText(tab.data, scope.path);
-    return await writeTab(tab, scope, tab.data);
+    saved = await writeTab(tab, scope, tab.data);
+    return saved;
   } catch (e) {
     if (scope.live()) tab.dirty = true;
     report(tab, scope, e);
     return false;
   } finally {
     tab.saving = false;
+    if (saved && scope.live()) releaseCleanInactive(tab);
   }
 }
 export async function saveComparedTab(
@@ -179,6 +188,7 @@ export async function saveComparedTab(
     return 'cancelled';
   const scope = snapshot(tab);
   tab.saving = true;
+  let saved = false;
   try {
     requireText(tab.data, scope.path);
     requireText(disk, scope.path);
@@ -198,13 +208,15 @@ export async function saveComparedTab(
       );
       return 'failed';
     }
-    return (await writeTab(tab, scope, compared)) ? 'saved' : 'cancelled';
+    saved = await writeTab(tab, scope, compared);
+    return saved ? 'saved' : 'cancelled';
   } catch (e) {
     if (scope.live()) tab.dirty = true;
     report(tab, scope, e);
     return 'failed';
   } finally {
     tab.saving = false;
+    if (saved && scope.live()) releaseCleanInactive(tab);
   }
 }
 export async function closeTab(path: string): Promise<boolean> {
@@ -300,6 +312,7 @@ export async function reloadTab(tab = currentTab()): Promise<boolean> {
     tab.dirty = false;
     tab.conflict = undefined;
     if (scope.visible()) editor.error = '';
+    releaseCleanInactive(tab);
     return true;
   } catch (e) {
     report(tab, scope, e);

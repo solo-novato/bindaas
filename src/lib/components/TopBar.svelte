@@ -22,6 +22,7 @@
     attentionTasks,
     taskPing,
     navigationBusy,
+    projectChanging = false,
     newTaskDisabled,
     onproject,
     onnavigate,
@@ -47,6 +48,7 @@
     attentionTasks: [string, Task][];
     taskPing: number;
     navigationBusy: boolean;
+    projectChanging?: boolean;
     newTaskDisabled: boolean;
     onproject: () => void;
     onnavigate: (view: string) => void;
@@ -75,6 +77,7 @@
     aria-haspopup="dialog"
     aria-expanded={projectMenu}
     title={project?.root ?? 'Open a project'}
+    disabled={projectChanging}
     onclick={onproject}
     ><strong>{project?.displayName ?? 'Bindaas'}</strong><span
       class="project-subtitle muted"
@@ -95,6 +98,7 @@
     {#each ['Chat', 'Files', 'Changes', 'Runs', 'Settings'] as tab}<button
         class:active={view === tab}
         aria-current={view === tab ? 'page' : undefined}
+        disabled={projectChanging}
         onclick={() => onnavigate(tab)}
         ><span class="nav-icon"
           ><Icon name={navigationIcons[tab]} size={15} /></span
@@ -107,6 +111,7 @@
     class="launch-trigger"
     aria-label="Jump to anything"
     title="Search actions, tasks, and files (⌘K)"
+    disabled={projectChanging}
     onclick={onlauncher}
     ><span aria-hidden="true"><Icon name="search" size={15} /></span><span
       >Jump to…</span
@@ -115,7 +120,7 @@
   <button
     aria-label="Session status"
     title="Session status and usage"
-    disabled={!project}
+    disabled={!project || projectChanging}
     onclick={onstatus}
     class="agent-status"
     class:ready={connectionType === 'ready' && !active}
@@ -132,7 +137,7 @@
       aria-label="Browse tasks"
       title="Switch between tasks (⌘K)"
       class:has-running={workingTasks > 0}
-      disabled={!project}
+      disabled={!project || projectChanging}
       onclick={ontasks}
     >
       {#if taskPing}{#key taskPing}<span class="task-ping" aria-hidden="true"

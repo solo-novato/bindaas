@@ -2455,13 +2455,16 @@
     {attentionTasks}
     {taskPing}
     {navigationBusy}
+    projectChanging={restoring}
     newTaskDisabled={starting ||
       queueSending ||
       runLoading ||
       attaching ||
       settingsBusy ||
       restoring}
-    onproject={() => (projectMenu = !projectMenu)}
+    onproject={() => {
+      if (!restoring) projectMenu = !projectMenu;
+    }}
     onnavigate={(tab) => run(() => navigate(tab))}
     onlauncher={() => (launcher = 'All')}
     onstatus={() => (sessionPanel = 'status')}
