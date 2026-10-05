@@ -47,7 +47,7 @@
   }: {
     c: ComposerState;
     onattach: () => void;
-    onaddcontext: () => void;
+    onaddcontext: (trigger: HTMLElement) => void;
     onharness: (harness: Harness) => void;
     onpermissions: () => void;
     onmode: (mode: CollaborationMode) => void;
@@ -70,8 +70,10 @@
     <button
       class="context-button"
       aria-label="Add file context for current editor"
+      tabindex="0"
       disabled={!c.canAddContext}
-      onclick={onaddcontext}><Icon name="plus" size={14} /> Context</button
+      onclick={(event) => onaddcontext(event.currentTarget)}
+      ><Icon name="plus" size={14} /> Context</button
     >
   </div>
   <div class="model-controls">

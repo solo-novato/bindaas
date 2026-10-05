@@ -1017,7 +1017,7 @@
       fail(e);
     }
   }
-  function openFileContext() {
+  function openFileContext(trigger: HTMLElement) {
     const tab = currentTab();
     if (!project || !tab || navigationBusy) return;
     let snapshot: Context | null = null;
@@ -1034,7 +1034,7 @@
       snapshot,
       snapshotError,
       dirty: tab.dirty,
-      trigger: document.activeElement as HTMLElement,
+      trigger,
     };
     fileContextModule ??= loadFileContextPicker();
   }

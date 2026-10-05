@@ -78,7 +78,10 @@ async function openFile(page: Page, path = 'hello.txt') {
   await expect(page.locator('.file-toolbar')).toContainText(path);
 }
 async function edit(page: Page, text: string) {
-  const start = page.getByRole('button', { name: 'Edit', exact: true });
+  // Queue cards also have an Edit button; only toggle the file's editor here.
+  const start = page
+    .locator('.file-toolbar')
+    .getByRole('button', { name: 'Edit', exact: true });
   if (await start.isVisible()) await start.click();
   await page.locator('.cm-content').fill(text);
   await expect(page.locator('.file-status')).toContainText('Unsaved changes');
@@ -489,7 +492,9 @@ for (const harness of ['codex', 'claude'] as const) {
     });
     if (await writeAnother.isVisible()) await writeAnother.click();
     await edit(page, 'version belonging to a separate unsent draft');
+    await expect(queue).toContainText('Queued frozen request');
     await addContext(page, 'snapshot');
+    await expect(queue).toContainText('Queued frozen request');
     await prompt(page).fill('Keep this newer draft');
     await page.evaluate((agent) => {
       const w = window as any;
@@ -573,7 +578,13 @@ test('failed live steering preserves both a frozen draft and a distinct queued m
   });
   if (await writeAnother.isVisible()) await writeAnother.click();
   await edit(page, 'frozen steering request');
+  await expect(
+    page.getByRole('region', { name: 'Queued message' }),
+  ).toContainText('Queued request');
   await addContext(page, 'snapshot');
+  await expect(
+    page.getByRole('region', { name: 'Queued message' }),
+  ).toContainText('Queued request');
   await prompt(page).fill('Immediate correction');
   await page.evaluate(
     () => ((window as any).testSteerError = 'Input not accepted'),
