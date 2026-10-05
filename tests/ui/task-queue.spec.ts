@@ -1231,3 +1231,234 @@ test('removing every queued entry does not send anything and queues do not survi
     page.getByText('SESSION_ONLY_QUEUE_SENTINEL', { exact: true }),
   ).toHaveCount(0);
 });
+
+test('closing an idle window warns about its queue, Cancel keeps edits, and discard closes only this window', async ({
+  page,
+}) => {
+  await queueFixture(page);
+  await startTask(page);
+  await enqueue(page, [
+    'Keep the first queued step',
+    'Keep the second queued step',
+  ]);
+  await queue(page).getByRole('button', { name: 'Pause queue' }).click();
+  await finish(page);
+  await expect(
+    page.getByRole('button', { name: 'Stop', exact: true }),
+  ).toHaveCount(0);
+  await entries(page)
+    .nth(1)
+    .getByRole('button', { name: 'Edit', exact: true })
+    .click();
+  const editor = queue(page).getByRole('textbox', {
+    name: 'Edit queued message',
+  });
+  await editor.fill('An unfinished edit before closing');
+  await prompt(page).fill('A separate unsent composer draft');
+  await page.evaluate(() => {
+    const w = window as any;
+    w.testOtherWindows = { count: 1, projects: ['/work/another-project'] };
+    w.testEmitApp('tauri://close-requested');
+  });
+  const warning = page.getByRole('dialog', {
+    name: 'Queued tasks will be discarded',
+  });
+  await expect(warning).toContainText('2 queued messages will be discarded');
+  await expect(warning).toContainText(
+    'Queues are kept only while this window is open.',
+  );
+  await warning.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(warning).toHaveCount(0);
+  await expect(entries(page)).toHaveCount(2);
+  await expect(editor).toHaveValue('An unfinished edit before closing');
+  await expect(prompt(page)).toHaveValue('A separate unsent composer draft');
+  const closeCalls = () =>
+    page.evaluate(() =>
+      (window as any).testCalls.filter(
+        (call: any) => call.command === 'window_close',
+      ),
+    );
+  expect(await closeCalls()).toHaveLength(0);
+  await page.evaluate(() =>
+    (window as any).testEmitApp('tauri://close-requested'),
+  );
+  await expect(warning).toBeVisible();
+  await warning
+    .getByRole('button', { name: 'Discard queue and leave', exact: true })
+    .click();
+  await expect.poll(async () => (await closeCalls()).length).toBe(1);
+  expect(
+    await page.evaluate(() =>
+      (window as any).testCalls.filter((call: any) =>
+        ['app_request_quit', 'app_quit_step', 'codex_interrupt_turn'].includes(
+          call.command,
+        ),
+      ),
+    ),
+  ).toHaveLength(0);
+});
+
+test('last-window quit approval preserves its paused queue and inline edit if another window cancels', async ({
+  page,
+}) => {
+  await queueFixture(page);
+  await startTask(page);
+  await enqueue(page, ['Queued work pending quit']);
+  await queue(page).getByRole('button', { name: 'Pause queue' }).click();
+  await finish(page);
+  await expect(
+    page.getByRole('button', { name: 'Stop', exact: true }),
+  ).toHaveCount(0);
+  await entries(page)
+    .first()
+    .getByRole('button', { name: 'Edit', exact: true })
+    .click();
+  const editor = queue(page).getByRole('textbox', {
+    name: 'Edit queued message',
+  });
+  await editor.fill('Unfinished edit retained through quit approval');
+  await page.evaluate(() => {
+    const w = window as any;
+    w.testOtherWindows = { count: 0, projects: [] };
+    w.testEmitApp('tauri://close-requested');
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as any).testCalls.filter(
+            (call: any) => call.command === 'app_request_quit',
+          ).length,
+      ),
+    )
+    .toBe(1);
+  const warning = page.getByRole('dialog', {
+    name: 'Queued tasks will be discarded',
+  });
+  await expect(warning).toHaveCount(0);
+  const requestQuit = () =>
+    page.evaluate(() =>
+      (window as any).testEmitApp('workbench://quit-requested'),
+    );
+  const quitAnswers = () =>
+    page.evaluate(() =>
+      (window as any).testCalls
+        .filter((call: any) => call.command === 'app_quit_step')
+        .map((call: any) => call.args),
+    );
+  await requestQuit();
+  await expect(warning).toContainText('1 queued message will be discarded');
+  await warning.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect.poll(quitAnswers).toEqual([{ approved: false }]);
+  await expect(editor).toHaveValue(
+    'Unfinished edit retained through quit approval',
+  );
+  await requestQuit();
+  await warning
+    .getByRole('button', { name: 'Discard queue and leave', exact: true })
+    .click();
+  await expect
+    .poll(quitAnswers)
+    .toEqual([{ approved: false }, { approved: true }]);
+  await expect(warning).toHaveCount(0);
+  // Native quit awaits the other windows. If one declines, this window remains
+  // open; approving our own step must not eagerly clear any queued data.
+  await expect(entries(page)).toHaveCount(1);
+  await expect(editor).toHaveValue(
+    'Unfinished edit retained through quit approval',
+  );
+  await editor.fill('Still editable after another window cancels');
+  await requestQuit();
+  await expect(warning).toBeVisible();
+  await warning.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect
+    .poll(quitAnswers)
+    .toEqual([{ approved: false }, { approved: true }, { approved: false }]);
+  await expect(editor).toHaveValue(
+    'Still editable after another window cancels',
+  );
+  expect(
+    await page.evaluate(() =>
+      (window as any).testCalls.filter(
+        (call: any) => call.command === 'window_close',
+      ),
+    ),
+  ).toHaveLength(0);
+  await queue(page)
+    .getByRole('button', { name: 'Save changes', exact: true })
+    .click();
+  await queue(page).getByRole('button', { name: 'Resume queue' }).click();
+  await expectStarts(page, 2);
+  expect((await starts(page))[1].args.prompt).toBe(
+    'Still editable after another window cancels',
+  );
+});
+
+for (const background of [false, true]) {
+  test(`switching projects with an idle ${background ? 'background' : 'foreground'} queue opens another window and preserves edits`, async ({
+    page,
+  }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.testRecentProjects = ['/work/next-project'];
+      w.testOtherWindows = { count: 1, projects: ['/work/unrelated-project'] };
+    });
+    await queueFixture(page);
+    await startTask(page, 'Conversation kept in its project');
+    await enqueue(page, ['Keep work in this project', 'Another queued step']);
+    await queue(page).getByRole('button', { name: 'Pause queue' }).click();
+    await finish(page);
+    await expect(
+      page.getByRole('button', { name: 'Stop', exact: true }),
+    ).toHaveCount(0);
+    await entries(page)
+      .nth(1)
+      .getByRole('button', { name: 'Edit', exact: true })
+      .click();
+    const editor = queue(page).getByRole('textbox', {
+      name: 'Edit queued message',
+    });
+    await editor.fill('Preserve this inline edit when choosing a project');
+    if (background) {
+      await page.getByRole('button', { name: 'New task', exact: true }).click();
+      await expect(queue(page)).toHaveCount(0);
+    }
+    await prompt(page).fill('Preserve the current composer draft');
+    const trigger = page.locator('.project-button');
+    await trigger.click();
+    const picker = page.getByRole('dialog', { name: 'Switch project' });
+    // An ordinary selection must be redirected; no modifier asks for a new window.
+    await picker.getByRole('option', { name: /\/work\/next-project/ }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as any).testCalls
+            .filter((call: any) => call.command === 'window_open')
+            .map((call: any) => call.args.path),
+        ),
+      )
+      .toEqual(['/work/next-project']);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).testCalls.filter(
+            (call: any) => call.command === 'project_open',
+          ).length,
+      ),
+    ).toBe(1);
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toContainText('fixture-project');
+    await expect(prompt(page)).toHaveValue(
+      'Preserve the current composer draft',
+    );
+    await expectStarts(page, 1);
+    if (background) await switchTask(page, 'Conversation kept in its project');
+    await expect(entries(page)).toHaveCount(2);
+    await expect(editor).toHaveValue(
+      'Preserve this inline edit when choosing a project',
+    );
+    await expect(
+      queue(page).getByRole('button', { name: 'Resume queue' }),
+    ).toBeDisabled();
+  });
+}
