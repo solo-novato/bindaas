@@ -31,7 +31,7 @@
   const truncated = $derived(
     localText.length > previewLimit || diskText.length > previewLimit,
   );
-  const busy = $derived(!!tab.saving || !!tab.reloading);
+  const busy = $derived(!!tab.saving || !!tab.reloading || !!tab.fileOperation);
   const canSave = $derived(
     !!disk && !loading && !busy && !truncated && !invalidated && tab.dirty,
   );
@@ -45,6 +45,7 @@
     );
   }
   async function refreshDisk() {
+    if (tab.fileOperation) return;
     const ticket = ++request;
     loading = true;
     invalidated = true;

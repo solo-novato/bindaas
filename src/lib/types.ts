@@ -192,6 +192,8 @@ export type Tab = {
   /** Includes confirmation and the pending write/read; typing remains allowed. */
   saving?: boolean;
   reloading?: boolean;
+  /** A filesystem mutation owns this path; edits resume when it settles. */
+  fileOperation?: 'rename' | 'trash';
   cursor: number;
   scroll: number;
 };

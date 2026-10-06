@@ -4,6 +4,14 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+### Fixed
+
+- File creation, rename, and Trash keep their originating project and reject stale operations after a project change. Pending mutations reserve affected files against editing, saving, closing, or competing actions, preserve editor state through rename, and release controls after failures. Late results cannot reset another project's explorer or newer inline edits.
+
+### Security
+
+- Update the development-only transitive `source-map-js` dependency to 1.2.2 to address its indexed source-map denial-of-service advisory. Production dependencies are unchanged.
+
 ## [0.2.1] - Unreleased candidate
 
 ### Added

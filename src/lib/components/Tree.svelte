@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { rise } from '../motion';
   import Tree from './Tree.svelte';
   import Icon, { type IconName } from './Icon.svelte';
@@ -69,7 +70,19 @@
     } else if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
+      const edit = explorer.editing;
+      const pane = input.closest('aside');
+      const target = edit?.mode === 'rename' ? edit.path : edit?.parent;
       cancelEdit();
+      tick().then(() => {
+        const row = Array.from(
+          pane?.querySelectorAll<HTMLButtonElement>('.tree-row') ?? [],
+        ).find((button) => button.title === target);
+        (
+          row ??
+          pane?.querySelector<HTMLButtonElement>('[aria-label="New file"]')
+        )?.focus();
+      });
     }
   }
   function fieldBlur(event: FocusEvent, initial: string) {
@@ -83,6 +96,11 @@
   let loading = $state(false);
   let error = $state('');
   let truncated = $state(false);
+  let nameInput = $state<HTMLInputElement>();
+  $effect(() => {
+    if (!explorer.busy && explorer.error && nameInput?.isConnected)
+      nameInput.focus();
+  });
 
   function fileIcon(name: string): IconName {
     if (/\.(md|markdown|mdx)$/i.test(name)) return 'markdown';
@@ -159,6 +177,7 @@
     >
       <button
         class="tree-row"
+        tabindex="0"
         style:padding-left={`${14 + depth * 14}px`}
         title={entry.path}
         aria-label={entry.name}
@@ -247,6 +266,7 @@
       ><Icon name={directory ? 'folder' : 'file'} size={15} /></span
     >
     <input
+      bind:this={nameInput}
       aria-label={label}
       aria-invalid={!!explorer.error}
       aria-describedby={explorer.error ? 'tree-input-error' : undefined}

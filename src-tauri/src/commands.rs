@@ -454,6 +454,28 @@ pub async fn file_open_default(
     let p = files::safe_to_open(&root(&s, &window)?, &relative_path)?;
     open::that(p).map_err(|e| e.to_string())
 }
+
+/// Check ownership only after waiting for any project replacement, and keep that
+/// replacement blocked until the file operation has finished.
+async fn mutate_project_file<T: Send + 'static>(
+    operations: &tokio::sync::Mutex<()>,
+    windows: &windows::Windows,
+    label: &str,
+    expected_project_root: &str,
+    mutation: impl FnOnce(PathBuf) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let _op = operations.lock().await;
+    let root = windows.project(label).ok_or("Open a project first")?;
+    // Compare the canonical root returned by project_open directly. Resolving
+    // the supplied path again could silently accept a changed symlink target.
+    if root.as_path() != Path::new(expected_project_root) {
+        return Err("The active project changed; reopen this file action and try again".into());
+    }
+    tokio::task::spawn_blocking(move || mutation(root))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn file_create(
     s: State<'_, AppState>,
@@ -461,12 +483,16 @@ pub async fn file_create(
     parent: String,
     name: String,
     directory: bool,
+    expected_project_root: String,
 ) -> Result<String, String> {
-    let _op = s.operations.lock().await;
-    let root = root(&s, &window)?;
-    tokio::task::spawn_blocking(move || files::create(&root, &parent, &name, directory))
-        .await
-        .map_err(|e| e.to_string())?
+    mutate_project_file(
+        &s.operations,
+        &s.windows,
+        window.label(),
+        &expected_project_root,
+        move |root| files::create(&root, &parent, &name, directory),
+    )
+    .await
 }
 #[tauri::command]
 pub async fn file_rename(
@@ -474,24 +500,32 @@ pub async fn file_rename(
     window: tauri::Window,
     relative_path: String,
     name: String,
+    expected_project_root: String,
 ) -> Result<String, String> {
-    let _op = s.operations.lock().await;
-    let root = root(&s, &window)?;
-    tokio::task::spawn_blocking(move || files::rename(&root, &relative_path, &name))
-        .await
-        .map_err(|e| e.to_string())?
+    mutate_project_file(
+        &s.operations,
+        &s.windows,
+        window.label(),
+        &expected_project_root,
+        move |root| files::rename(&root, &relative_path, &name),
+    )
+    .await
 }
 #[tauri::command]
 pub async fn file_trash(
     s: State<'_, AppState>,
     window: tauri::Window,
     relative_path: String,
+    expected_project_root: String,
 ) -> Result<(), String> {
-    let _op = s.operations.lock().await;
-    let root = root(&s, &window)?;
-    tokio::task::spawn_blocking(move || files::trash(&root, &relative_path))
-        .await
-        .map_err(|e| e.to_string())?
+    mutate_project_file(
+        &s.operations,
+        &s.windows,
+        window.label(),
+        &expected_project_root,
+        move |root| files::trash(&root, &relative_path),
+    )
+    .await
 }
 /// Whether the Codex CLI can be found (a cheap lookup; nothing is started).
 pub(crate) async fn codex_installed(s: &AppState) -> bool {
@@ -1277,4 +1311,146 @@ pub async fn codex_steer_turn(
         &client_user_message_id,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tokio::sync::Mutex;
+
+    type Mutation = fn(PathBuf) -> Result<(), String>;
+
+    fn mutations() -> [Mutation; 4] {
+        [
+            |root| files::create(&root, "", "new/note.txt", false).map(|_| ()),
+            |root| files::create(&root, "", "new/folder", true).map(|_| ()),
+            |root| files::rename(&root, "original.txt", "renamed.txt").map(|_| ()),
+            |root| files::trash(&root, "original.txt"),
+        ]
+    }
+
+    fn assert_unchanged(root: &Path, content: &str) {
+        assert_eq!(
+            fs::read_to_string(root.join("original.txt")).unwrap(),
+            content
+        );
+        assert_eq!(fs::read_dir(root).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_file_actions_cannot_mutate_either_project() {
+        let original = tempfile::tempdir().unwrap();
+        let replacement = tempfile::tempdir().unwrap();
+        let original = original.path().canonicalize().unwrap();
+        let replacement = replacement.path().canonicalize().unwrap();
+        fs::write(original.join("original.txt"), "original project").unwrap();
+        fs::write(replacement.join("original.txt"), "replacement project").unwrap();
+        let windows = windows::Windows::default();
+        windows.set_project("main", Some(replacement.clone()));
+        let operations = Mutex::new(());
+        for mutation in mutations() {
+            let error = mutate_project_file(
+                &operations,
+                &windows,
+                "main",
+                &original.to_string_lossy(),
+                mutation,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains("active project changed"));
+            assert_unchanged(&original, "original project");
+            assert_unchanged(&replacement, "replacement project");
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_file_actions_recheck_project_after_acquiring_lock() {
+        let original = tempfile::tempdir().unwrap();
+        let replacement = tempfile::tempdir().unwrap();
+        let original = original.path().canonicalize().unwrap();
+        let replacement = replacement.path().canonicalize().unwrap();
+        fs::write(original.join("original.txt"), "original project").unwrap();
+        fs::write(replacement.join("original.txt"), "replacement project").unwrap();
+        let windows = windows::Windows::default();
+        let operations = Mutex::new(());
+        let expected = original.to_string_lossy();
+        for mutation in mutations() {
+            windows.set_project("main", Some(original.clone()));
+            let project_change = operations.lock().await;
+            let pending = mutate_project_file(&operations, &windows, "main", &expected, mutation);
+            tokio::pin!(pending);
+            // Poll the mutation once while replacement owns the lock, without
+            // sleeps or relying on the scheduler to order two spawned tasks.
+            tokio::select! {
+                biased;
+                _ = &mut pending => panic!("File mutation did not wait for the project lock"),
+                _ = std::future::ready(()) => {}
+            }
+            windows.set_project("main", Some(replacement.clone()));
+            drop(project_change);
+            assert!(pending
+                .await
+                .unwrap_err()
+                .contains("active project changed"));
+            assert_unchanged(&original, "original project");
+            assert_unchanged(&replacement, "replacement project");
+        }
+    }
+
+    #[tokio::test]
+    async fn matching_project_mutates_under_lock_in_the_calling_window() {
+        let original = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let original = original.path().canonicalize().unwrap();
+        let other = other.path().canonicalize().unwrap();
+        let windows = windows::Windows::default();
+        windows.set_project("main", Some(other.clone()));
+        windows.set_project("second", Some(original.clone()));
+        let operations = Arc::new(Mutex::new(()));
+        let mutation_lock = operations.clone();
+        let result = mutate_project_file(
+            &operations,
+            &windows,
+            "second",
+            &original.to_string_lossy(),
+            move |root| {
+                assert!(mutation_lock.try_lock().is_err());
+                files::create(&root, "", "original.txt", false)?;
+                files::rename(&root, "original.txt", "renamed.txt")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, "renamed.txt");
+        assert!(original.join("renamed.txt").is_file());
+        assert_eq!(fs::read_dir(&other).unwrap().count(), 0);
+        assert!(operations.try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn file_actions_require_an_open_matching_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let windows = windows::Windows::default();
+        let operations = Mutex::new(());
+        let error = mutate_project_file::<()>(
+            &operations,
+            &windows,
+            "main",
+            &root.to_string_lossy(),
+            |_| panic!("A closed project must never run a file mutation"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Open a project first");
+        windows.set_project("main", Some(root));
+        let error = mutate_project_file::<()>(&operations, &windows, "main", "", |_| {
+            panic!("An empty expected root must never run a file mutation")
+        })
+        .await
+        .unwrap_err();
+        assert!(error.contains("active project changed"));
+    }
 }

@@ -65,6 +65,7 @@ Then open a project folder and describe a task.
 - **Review:** open **Changes** to walk through each patch, mark files reviewed, or ask a scoped follow-up.
 - **Recover:** **↻ Retry** resends a failed task; **Rewrite** on your latest message removes it from the conversation and puts it back in the composer (files already changed stay as they are).
 - **Files:** use the explorer's **New file / New folder**, or right-click for Rename (`F2`), Copy path, Reveal in Finder, and Move to Trash (`⌘⌫`).
+- **Safe file actions:** save or discard edits before renaming or moving their file/folder to Trash. While an action is pending, affected editors pause editing and saving; other files stay usable. Rename keeps the open buffer, cursor and undo history. The explorer shows progress and recoverable errors, and project switching waits until the action finishes.
 - **Resolve file conflicts:** when the agent changes a file you are editing, **Compare** opens an on-demand view of your buffer and the disk snapshot. Refresh the disk view, copy your full text, reload with confirmation, or explicitly **Save my version** against the reviewed disk fingerprint. Failed or late reads/writes keep unsaved edits; incomplete previews cannot be used to replace the disk version.
 - **Several projects at once:** each project gets its own window. Press `⌘⇧N` for a new window, or `⌘↵` on a project in the project menu. While tasks run, picking another project opens it in a new window, so nothing is interrupted. Windows reopen where you left them.
 
