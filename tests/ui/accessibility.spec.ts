@@ -88,6 +88,40 @@ test('accessibility audit across working destinations and dialogs', async ({
     await expect(page.getByRole('dialog').locator('pre')).toBeVisible();
     await audit(`${appearance}: attachment`);
     await page.keyboard.press('Escape');
+    await page
+      .getByRole('complementary', { name: 'Project explorer' })
+      .getByRole('button', { name: 'hello.txt', exact: true })
+      .click();
+    await expect(page.locator('.cm-editor')).toBeVisible();
+    await page
+      .getByRole('button', { name: 'Add file context for current editor' })
+      .click();
+    const picker = page.getByRole('dialog', { name: 'Add file context' });
+    await expect(
+      picker.getByRole('radio', { name: 'Editor snapshot', exact: true }),
+    ).toBeVisible();
+    await audit(`${appearance}: file context picker`);
+    await picker
+      .getByRole('radio', { name: 'Editor snapshot', exact: true })
+      .check();
+    await picker
+      .getByRole('button', { name: 'Add editor snapshot', exact: true })
+      .click();
+    await page
+      .getByRole('button', {
+        name: 'Preview context hello.txt · editor snapshot',
+        exact: true,
+      })
+      .click();
+    const context = page.getByRole('dialog', { name: 'Context preview' });
+    await expect(
+      context.getByRole('textbox', { name: 'Context text' }),
+    ).toBeVisible();
+    await audit(`${appearance}: editor context preview`);
+    await context
+      .getByRole('button', { name: 'Remove context', exact: true })
+      .click();
+    await page.getByRole('button', { name: 'Chat', exact: true }).click();
   }
   await page
     .getByRole('textbox', { name: 'Task prompt' })

@@ -2,7 +2,10 @@
 use crate::{claude, codex, commands, settings, AppState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{atomic::Ordering, Arc};
+use std::{
+    path::Path,
+    sync::{atomic::Ordering, Arc},
+};
 use tauri::{AppHandle, State, Window};
 use tokio::sync::Mutex;
 
@@ -551,19 +554,41 @@ pub async fn agent_start_turn(
         codex::input::Mode::Plan => "plan",
         _ => "default",
     });
-    let result = c
-        .start(
-            &prompt,
-            attachments,
-            model.as_deref().filter(|m| *m != "default"),
-            mode,
-        )
-        .await?;
-    let mut saved = s.settings.lock().await;
-    saved
-        .project_state
-        .insert(c.root.to_string_lossy().into_owned(), c.thread());
-    settings::save(&s.settings_path, &saved)?;
+    start_claude_turn(
+        &c,
+        &s.settings,
+        &s.settings_path,
+        &prompt,
+        attachments,
+        model.as_deref().filter(|m| *m != "default"),
+        mode,
+    )
+    .await
+}
+async fn start_claude_turn(
+    c: &claude::Client,
+    preferences: &Mutex<settings::Settings>,
+    settings_path: &Path,
+    prompt: &str,
+    attachments: Vec<Value>,
+    model: Option<&str>,
+    mode: Option<&str>,
+) -> Result<Value, String> {
+    let result = c.start(prompt, attachments, model, mode).await?;
+    let persisted = {
+        let mut saved = preferences.lock().await;
+        saved
+            .project_state
+            .insert(c.root.to_string_lossy().into_owned(), c.thread());
+        settings::save(settings_path, &saved)
+    };
+    // A preference write failure must not turn an accepted message into a retry.
+    if let Err(error) = persisted {
+        c.emit(
+            "warning",
+            json!({"turnId":result["turn"]["id"],"message":format!("Claude accepted the message, but Bindaas could not save the last conversation preference: {error}")}),
+        );
+    }
     Ok(result)
 }
 #[tauri::command]
@@ -877,6 +902,122 @@ pub async fn agent_sleep_now(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type Events = Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+    async fn claude_fixture(root: &Path) -> (Arc<claude::Client>, Events) {
+        let events: Events = Default::default();
+        let target = events.clone();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/claude-cli.mjs");
+        let client = claude::Client::spawn(
+            &fixture,
+            root,
+            &claude::uuid(),
+            false,
+            1,
+            Arc::new(move |name, payload| {
+                target.lock().unwrap().push((name.into(), payload));
+            }),
+            30,
+        )
+        .await
+        .unwrap();
+        (client, events)
+    }
+
+    #[tokio::test]
+    async fn accepted_claude_start_survives_preference_save_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file in place of the settings directory fails even with elevated permissions.
+        let blocked_parent = dir.path().join("settings-parent");
+        std::fs::write(&blocked_parent, "preserve this file").unwrap();
+        let settings_path = blocked_parent.join("settings.json");
+        let project = dir.path().to_string_lossy().into_owned();
+        let preferences = Mutex::new(settings::Settings::default());
+        let (client, events) = claude_fixture(dir.path()).await;
+
+        let result = start_claude_turn(
+            &client,
+            &preferences,
+            &settings_path,
+            "hold",
+            vec![],
+            None,
+            None,
+        )
+        .await
+        .expect("an accepted message must not be reported as a failed send");
+
+        assert_eq!(result["threadId"], client.thread());
+        assert_eq!(result["turn"]["status"], "inProgress");
+        assert_eq!(
+            result["turn"],
+            client.runtime.lock().await.turn.clone().unwrap()
+        );
+        assert!(result["settings"].is_object());
+        assert_eq!(
+            preferences.lock().await.project_state.get(&project),
+            Some(&client.thread())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&blocked_parent).unwrap(),
+            "preserve this file"
+        );
+        {
+            let events = events.lock().unwrap();
+            let warnings: Vec<_> = events
+                .iter()
+                .filter(|(name, _)| name == "agent://warning")
+                .collect();
+            assert_eq!(warnings.len(), 1);
+            let warning = &warnings[0].1;
+            assert_eq!(warning["threadId"], result["threadId"]);
+            assert_eq!(warning["turnId"], result["turn"]["id"]);
+            assert!(warning["message"]
+                .as_str()
+                .unwrap()
+                .contains("accepted the message"));
+            assert!(warning["message"]
+                .as_str()
+                .unwrap()
+                .contains("could not save the last conversation preference"));
+        }
+        client.shutdown(true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejected_claude_start_does_not_save_preferences_or_report_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let preferences = Mutex::new(settings::Settings::default());
+        let (client, events) = claude_fixture(dir.path()).await;
+
+        let error = start_claude_turn(
+            &client,
+            &preferences,
+            &settings_path,
+            "",
+            vec![],
+            None,
+            None,
+        )
+        .await
+        .expect_err("a rejected start must remain a failed send");
+
+        assert_eq!(error, "Add a message or attachment; prompt limit is 128 KiB");
+        assert!(preferences.lock().await.project_state.is_empty());
+        assert!(!settings_path.exists());
+        assert!(client.runtime.lock().await.turn.is_none());
+        {
+            let events = events.lock().unwrap();
+            assert!(!events.iter().any(|(name, _)| {
+                name == "agent://warning" || name == "agent://turn-started"
+            }));
+        }
+        client.shutdown(false).await.unwrap();
+    }
+
     #[test]
     fn native_ids_are_namespaced_without_touching_turn_or_item_ids() {
         let v = qualify(

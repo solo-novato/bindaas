@@ -23,21 +23,65 @@
   } from '@codemirror/language';
   import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
   import { language } from '../languages';
-  import type { Tab, Context } from '../types';
+  import type { Tab } from '../types';
+  import {
+    MAX_FROZEN_CONTEXT_BYTES,
+    type FileSelectionCapture,
+  } from '../fileContext';
   let {
     tab,
     onchange,
-    oncontext,
+    projectRoot,
+    onselection,
   }: {
     tab: Tab;
     onchange: (text: string) => void;
-    oncontext: (context: Context) => void;
+    projectRoot: string;
+    onselection: (
+      capture: FileSelectionCapture & { projectRoot: string },
+    ) => void;
   } = $props();
   let host: HTMLDivElement;
   let view: EditorView | undefined;
-  let selected = $state<{ text: string; from: number; to: number } | null>(
-    null,
-  );
+  let selected = $state<{
+    owner: Tab;
+    capture: FileSelectionCapture & { projectRoot: string };
+    tooLarge: boolean;
+  } | null>(null);
+  function rememberSelection(state: EditorState) {
+    const range = state.selection.main;
+    tab.cursor = range.head;
+    const tooLarge = range.to - range.from > MAX_FROZEN_CONTEXT_BYTES;
+    selected = range.empty
+      ? null
+      : {
+          owner: tab,
+          tooLarge,
+          capture: {
+            projectRoot,
+            path: tab.path,
+            dirty: tab.dirty,
+            text: tooLarge ? '' : state.sliceDoc(range.from, range.to),
+            fromOffset: range.from,
+            toOffset: range.to,
+            fromLine: state.doc.lineAt(range.from).number,
+            toLine: state.doc.lineAt(Math.max(range.from, range.to - 1)).number,
+          },
+        };
+  }
+  function addSelection() {
+    if (
+      !selected ||
+      selected.tooLarge ||
+      tab.fileOperation ||
+      selected.owner !== tab ||
+      selected.capture.projectRoot !== projectRoot
+    )
+      return;
+    // A rename preserves this tab and its editor state. Capture its current
+    // source path and saved state when Add is pressed.
+    onselection({ ...selected.capture, path: tab.path, dirty: tab.dirty });
+  }
   let error = $state('');
   let mounted = $state(false);
   const editable = new Compartment(),
@@ -116,17 +160,8 @@
           fileIdentity.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onchange(update.state.doc.toString());
-            if (update.selectionSet) {
-              const range = update.state.selection.main;
-              tab.cursor = range.head;
-              selected = range.empty
-                ? null
-                : {
-                    text: update.state.sliceDoc(range.from, range.to),
-                    from: update.state.doc.lineAt(range.from).number,
-                    to: update.state.doc.lineAt(range.to).number,
-                  };
-            }
+            if (update.selectionSet || update.docChanged)
+              rememberSelection(update.state);
           }),
         ],
       }),
@@ -167,17 +202,8 @@
         grammar.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onchange(update.state.doc.toString());
-          if (update.selectionSet) {
-            const range = update.state.selection.main;
-            tab.cursor = range.head;
-            selected = range.empty
-              ? null
-              : {
-                  text: update.state.sliceDoc(range.from, range.to),
-                  from: update.state.doc.lineAt(range.from).number,
-                  to: update.state.doc.lineAt(range.to).number,
-                };
-          }
+          if (update.selectionSet || update.docChanged)
+            rememberSelection(update.state);
         }),
       ];
       view.setState(
@@ -225,11 +251,10 @@
 <div class="code-host" bind:this={host}></div>
 {#if selected}<button
     class="selection-action"
-    disabled={!!tab.fileOperation}
-    onclick={() =>
-      oncontext({
-        id: crypto.randomUUID(),
-        label: `${tab.path} · lines ${selected!.from}–${selected!.to}`,
-        text: `File: ${tab.path}\nLines: ${selected!.from}–${selected!.to}\n\n${selected!.text}`,
-      })}>Ask Codex about selection ↗</button
+    aria-label="Add selection to message"
+    disabled={selected.tooLarge || !!tab.fileOperation}
+    title={selected.tooLarge
+      ? 'Choose a smaller selection (up to 64 KiB including its source header).'
+      : 'Add this exact editor selection without saving the file'}
+    onclick={addSelection}>Add selection to message ↗</button
   >{/if}

@@ -120,7 +120,7 @@
     {#if blocked}<p class="project-switcher-notice" role="status">
         {blocked}
       </p>{:else if busyHere}<p class="project-switcher-notice" role="status">
-        Tasks are running here, so other projects open in a new window.
+        This window has work to keep, so other projects open in a new window.
       </p>{/if}
     <div
       class="project-switcher-results"

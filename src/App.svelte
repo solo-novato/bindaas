@@ -1,9 +1,18 @@
 <script lang="ts">
   import { onMount, untrack, tick } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { isTauri } from '@tauri-apps/api/core';
   import { api } from './lib/api';
+  import { buildDraftPrompt } from './lib/prompt';
+  import {
+    addFileContext,
+    createEditorSnapshot,
+    createFileReference,
+    createSelectionContext,
+    type FileSelectionCapture,
+  } from './lib/fileContext';
   import {
     agentName,
     harnessOf,
@@ -94,6 +103,22 @@
   import WelcomeScreen from './lib/components/WelcomeScreen.svelte';
   import InspectorPane from './lib/components/InspectorPane.svelte';
   import QueueCard from './lib/components/QueueCard.svelte';
+  import {
+    appendQueue,
+    beginQueueEdit,
+    cancelQueueEdit,
+    updateQueueEdit,
+    beginQueueSend,
+    canAdvanceQueue,
+    editQueue,
+    emptyQueue,
+    finishQueueSend,
+    MAX_QUEUED_MESSAGES,
+    moveQueue,
+    pauseQueueAfterTurn,
+    removeQueue,
+    type TaskQueue,
+  } from './lib/queue';
   import ComposerControls from './lib/components/ComposerControls.svelte';
   import {
     buildLaunchEntries,
@@ -129,11 +154,12 @@
   let error = $state('');
   let busy = $state(false);
   let starting = $state(false);
+  let stopRequestedWhileStarting = false;
   let prompt = $state('');
-  let queued = $state<Draft | null>(null);
+  let taskQueues = $state<Record<string, TaskQueue>>({});
+  const noQueue = emptyQueue();
   let queueSending = $state(false);
   const pendingSteers = new Map<string, TimelineItem>();
-  let queueError = $state('');
   let queueComposerOpen = $state(false);
   let archivedHistory = $state(false);
   let conversationBusy = $state(false);
@@ -150,10 +176,33 @@
   let taskSettings = $state<ThreadSettings | null>(null);
   let contexts = $state<Context[]>([]);
   let contextPreview = $state<Context | null>(null);
+  let contextPreviewScope = '';
+  let contextPreviewTrigger = $state<HTMLElement>();
+  type FileContextRequest = {
+    scope: string;
+    path: string;
+    reference: Context;
+    snapshot: Context | null;
+    snapshotError: string;
+    dirty: boolean;
+    trigger?: HTMLElement;
+  };
+  let fileContextRequest = $state<FileContextRequest | null>(null);
+  const loadFileContextPicker = () =>
+    import('./lib/components/FileContextPicker.svelte');
+  let fileContextModule = $state<ReturnType<
+    typeof loadFileContextPicker
+  > | null>(null);
+  const loadContextPreview = () =>
+    import('./lib/components/ContextPreview.svelte');
+  let contextPreviewModule = $state<ReturnType<
+    typeof loadContextPreview
+  > | null>(null);
   let attachmentPreview = $state<Attachment | null>(null);
   let attachmentPreviewTrigger = $state<HTMLButtonElement>();
   let composer: HTMLTextAreaElement;
   let threadId = $state<string | null>(null);
+  const queue = $derived((threadId && taskQueues[threadId]) || noQueue);
   const connection = $derived(
     connections[
       selectedHarness === 'claude' ? (threadId ?? 'claude') : 'codex'
@@ -266,7 +315,7 @@
   let windowWidth = $state(1440);
   let windowHeight = $state(940);
   const compactQueuedComposer = $derived(
-    !!queued &&
+    queue.entries.length > 0 &&
       approvals.length > 0 &&
       windowHeight <= 760 &&
       !prompt &&
@@ -335,6 +384,7 @@
       }
     >
   >({});
+  const completedTurns = new Map<string, Set<string>>();
   const runStatusRevisions = new Map<string, number>();
   const liveRunStatuses = new Map<string, RunStatus>();
   function updateRunStatus(id: string, status: RunStatus) {
@@ -344,17 +394,27 @@
       thread.id === id ? { ...thread, runStatus: status } : thread,
     );
   }
-  const drafts = new Map<
+  const drafts = new SvelteMap<
     string,
     {
       prompt: string;
       contexts: Context[];
       attachments: Attachment[];
-      queued: Draft | null;
-      queueError?: string;
       settings?: Draft;
     }
   >();
+  const pendingDraftCount = $derived.by(() => {
+    const currentKey = threadId ?? `new:${selectedHarness}`;
+    let count = prompt || contexts.length || attachments.length ? 1 : 0;
+    // A loaded draft's saved copy is stale until navigation stashes it again.
+    for (const [id, draft] of drafts)
+      if (
+        id !== currentKey &&
+        (draft.prompt || draft.contexts.length || draft.attachments.length)
+      )
+        count++;
+    return count;
+  });
   const anyActive = $derived(
     starting ||
       Object.values(taskRuns).some((r) => r.turn.status === 'inProgress') ||
@@ -389,6 +449,7 @@
   const navigationBusy = $derived(
     starting ||
       queueSending ||
+      !!queue.sendingId ||
       conversationBusy ||
       runLoading ||
       attaching ||
@@ -503,16 +564,12 @@
       prompt,
       contexts: [...contexts],
       attachments: [...attachments],
-      queued,
-      queueError,
       settings: currentDraft(),
     });
   }
   function loadDraft(id: string) {
     const saved = drafts.get(id);
     clearDraft();
-    queued = saved?.queued ?? null;
-    queueError = saved?.queueError ?? '';
     if (saved) {
       prompt = saved.prompt;
       contexts = saved.contexts;
@@ -521,34 +578,17 @@
     }
   }
   async function sendBackground(id: string, draft: Draft) {
-    try {
-      const context = draft.contexts
-        .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
-        .join('');
-      await api.send(
-        id,
-        draft.prompt + context,
-        draft.overrides ? draft.model || null : null,
-        draft.overrides ? draft.effort || null : null,
-        draft.overrides ? draft.mode : null,
-        draft.attachments.map((a) => a.id),
-        { permissions: null, approvalPolicy: null },
-        draft.harness ?? harnessOf(id),
-      );
-    } catch (e) {
-      const saved = drafts.get(id);
-      drafts.set(id, {
-        prompt: saved?.prompt ?? '',
-        contexts: saved?.contexts ?? [],
-        attachments: saved?.attachments ?? [],
-        queued: draft,
-      });
-      if (taskRuns[id]) taskRuns[id].error = `Follow-up not sent: ${String(e)}`;
-      if (threadId === id) {
-        queued = draft;
-        fail(e);
-      }
-    }
+    const full = validatedPrompt(draft);
+    await api.send(
+      id,
+      full,
+      draft.overrides ? draft.model || null : null,
+      draft.overrides ? draft.effort || null : null,
+      draft.overrides ? draft.mode : null,
+      draft.attachments.map((a) => a.id),
+      { permissions: null, approvalPolicy: null },
+      draft.harness ?? harnessOf(id),
+    );
   }
 
   const liveTurn = $derived(threadId ? taskRuns[threadId]?.turn : null);
@@ -741,7 +781,7 @@
   // Retry sends the same message again; it never rewrites history.
   async function retryTurn() {
     const original = taskPrompt.trim();
-    if (!original || active) return;
+    if (!original || active || navigationBusy) return;
     await sendDraft({
       ...currentDraft(),
       prompt: original,
@@ -907,21 +947,70 @@
       },
     };
   }
+  // Queue execution follows authoritative turn events, never a timer. Keep all
+  // conversations in one store so switching views cannot fork or lose a queue.
   $effect(() => {
-    if (
-      queued &&
-      !queueSending &&
-      !queueError &&
-      !active &&
-      turn?.status === 'completed'
-    ) {
-      untrack(() => {
-        const draft = queued!;
-        queued = null;
-        run(() => sendDraft(draft));
-      });
+    for (const [id, pending] of Object.entries(taskQueues)) {
+      const completed = taskRuns[id]?.turn ?? (id === threadId ? turn : null);
+      if (
+        canAdvanceQueue(pending, completed) &&
+        !(id === threadId && (active || navigationBusy))
+      )
+        untrack(() => run(() => dispatchQueued(id)));
     }
   });
+  function updateQueue(change: (value: TaskQueue) => TaskQueue) {
+    if (!threadId || navigationBusy || queue.sendingId) return;
+    taskQueues[threadId] = change(queue);
+  }
+  function updateQueueEditor(text?: string) {
+    // Typing must remain durable during unrelated attachment/settings IPC.
+    // The queue is already paused while editing, so this cannot dispatch work.
+    if (!threadId || !queue.editing) return;
+    taskQueues[threadId] =
+      text === undefined
+        ? cancelQueueEdit(queue)
+        : updateQueueEdit(queue, text);
+  }
+  function pauseTaskQueue() {
+    // Stop must win even when a send/steer acknowledgement is still in flight.
+    if (threadId && queue.entries.length)
+      taskQueues[threadId] = { ...queue, paused: true };
+  }
+  async function resumeTaskQueue() {
+    if (!threadId || navigationBusy || queue.sendingId) return;
+    const id = threadId;
+    taskQueues[id] = { ...queue, paused: false, error: '' };
+    // Explicit resume also permits retry after failure/interruption. An active
+    // turn still owns the conversation until it authoritatively completes.
+    if (!active) await dispatchQueued(id);
+  }
+  async function dispatchQueued(id: string, steer = false) {
+    const pending = taskQueues[id];
+    if (!pending?.entries.length || pending.sendingId || pending.editing)
+      return;
+    const current = taskRuns[id]?.turn ?? (id === threadId ? turn : null);
+    if (current?.status === 'inProgress' && !steer) return;
+    if (id === threadId && navigationBusy) return;
+    const entry = pending.entries[0];
+    taskQueues[id] = beginQueueSend(
+      pending,
+      steer ? pending.lastConsumedTurnId : (current?.id ?? null),
+    );
+    let failure: unknown;
+    try {
+      if (id === threadId) {
+        if (steer) await steerDraft(entry.draft, true);
+        else await sendDraft(entry.draft, true);
+      } else await sendBackground(id, entry.draft);
+    } catch (e) {
+      failure = e ?? 'The agent did not confirm delivery.';
+      if (taskRuns[id]) taskRuns[id].error = `Follow-up not sent: ${String(e)}`;
+      if (id === threadId) fail(e);
+    } finally {
+      taskQueues[id] = finishQueueSend(taskQueues[id], entry.id, failure);
+    }
+  }
   function fail(e: unknown) {
     error = String(e);
   }
@@ -940,10 +1029,162 @@
       ? path.slice(project.root.length + 1)
       : path;
   }
-  function addContext(context: Context) {
-    contexts = [...contexts, context];
-    composer?.focus();
+  function contextScope() {
+    return JSON.stringify([
+      project?.root ?? null,
+      threadId ?? 'new',
+      selectedHarness,
+    ]);
   }
+  function contextTargetMatches(context: Context) {
+    return (
+      !context.file ||
+      (!!project &&
+        context.file.projectRoot === (project.root.replace(/\/+$/, '') || '/'))
+    );
+  }
+  function addContext(context: Context) {
+    try {
+      if (!contextTargetMatches(context))
+        throw new Error(
+          'This file context belongs to another project. Add it again from the active project.',
+        );
+      contexts = context.file
+        ? addFileContext(contexts, context)
+        : [...contexts, context];
+      composer?.focus();
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+  function addEditorSelection(
+    capture: FileSelectionCapture & { projectRoot: string },
+  ) {
+    if (!project || navigationBusy) return;
+    if (
+      capture.projectRoot !== project.root ||
+      currentTab()?.path !== capture.path
+    ) {
+      fail('The selection belongs to another file. Select the text again.');
+      return;
+    }
+    try {
+      addContext(createSelectionContext(project.root, capture));
+    } catch (e) {
+      fail(e);
+    }
+  }
+  function openFileContext(trigger: HTMLElement) {
+    const tab = currentTab();
+    if (!project || !tab || navigationBusy) return;
+    let snapshot: Context | null = null;
+    let snapshotError = '';
+    try {
+      snapshot = createEditorSnapshot(project.root, tab);
+    } catch (e) {
+      snapshotError = String(e);
+    }
+    fileContextRequest = {
+      scope: contextScope(),
+      path: tab.path,
+      reference: createFileReference(project.root, tab.path),
+      snapshot,
+      snapshotError,
+      dirty: tab.dirty,
+      trigger,
+    };
+    fileContextModule ??= loadFileContextPicker();
+  }
+  function dismissContextPlaceholder(kind: 'picker' | 'preview') {
+    const trigger =
+      kind === 'picker' ? fileContextRequest?.trigger : contextPreviewTrigger;
+    if (kind === 'picker') fileContextRequest = null;
+    else contextPreview = null;
+    tick().then(() => {
+      if (!document.querySelector('dialog[open]') && trigger?.isConnected)
+        trigger.focus();
+    });
+  }
+  function commitFileContext(context: Context): string | null {
+    if (
+      !fileContextRequest ||
+      fileContextRequest.scope !== contextScope() ||
+      !contextTargetMatches(context)
+    )
+      return 'This draft changed while context was open. Close this dialog and add it again.';
+    if (navigationBusy)
+      return 'Wait for the current operation to finish, then add the context.';
+    try {
+      contexts = addFileContext(contexts, context);
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+  function previewContext(context: Context, trigger: HTMLElement) {
+    contextPreviewScope = contextScope();
+    contextPreviewTrigger = trigger;
+    contextPreview = context;
+    contextPreviewModule ??= loadContextPreview();
+  }
+  const canUpdateContext = $derived(
+    !!contextPreview?.file &&
+      contextPreview.file.kind !== 'selection' &&
+      contextPreviewScope === contextScope() &&
+      contextTargetMatches(contextPreview) &&
+      !contextPreview.file.directory &&
+      !navigationBusy &&
+      currentTab()?.path === contextPreview.file.path &&
+      currentTab()?.data?.encoding === 'utf8' &&
+      currentTab()?.content !== undefined,
+  );
+  const contextUpdateHint = $derived(
+    contextPreview?.file?.kind === 'selection'
+      ? 'Selection snapshots stay frozen. Select the new text in the editor to replace this range.'
+      : contextPreview?.file?.directory
+        ? 'Folder references contain no file text.'
+        : canUpdateContext
+          ? 'This uses the version currently open in the editor. It does not read or save disk.'
+          : 'Open this text file in the editor to capture its current contents. No disk read happens automatically.',
+  );
+  function updatePreviewContext(): string | null {
+    const before = contextPreview;
+    const tab = currentTab();
+    if (
+      !before ||
+      !canUpdateContext ||
+      !project ||
+      !tab ||
+      contexts.find((context) => context.id === before.id) !== before
+    )
+      return 'This context or editor changed. Reopen the context before updating it.';
+    try {
+      const next = createEditorSnapshot(project.root, tab);
+      const updated = addFileContext(
+        contexts.filter((context) => context.id !== before.id),
+        next,
+      );
+      contexts = updated;
+      // Reuse the stored state proxy so consecutive refreshes compare the same attachment.
+      contextPreview = contexts.find((context) => context.id === next.id)!;
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+  $effect(() => {
+    const scope = contextScope();
+    if (fileContextRequest && fileContextRequest.scope !== scope)
+      fileContextRequest = null;
+    if (
+      contextPreview &&
+      (contextPreviewScope !== scope ||
+        !contexts.some((context) => context.id === contextPreview?.id))
+    )
+      contextPreview = null;
+  });
   function prepareReview(context: Context, question: string) {
     prompt = prompt.trim() ? `${prompt}\n\n${question}` : question;
     addContext(context);
@@ -1083,20 +1324,57 @@
   }
   /** Running work keeps a window on its project; other projects open beside it. */
   const projectLocked = $derived(
-    !!project && (anyActive || approvals.length > 0 || attaching),
+    !!project &&
+      (anyActive ||
+        queueSending ||
+        pendingDraftCount > 0 ||
+        approvals.length > 0 ||
+        attaching ||
+        Object.values(taskQueues).some((pending) => pending.entries.length)),
   );
   async function chooseProject(path?: string, inNewWindow = false) {
-    if (restoring || explorer.busy) return;
+    if (
+      restoring ||
+      explorer.busy ||
+      runLoading ||
+      settingsBusy ||
+      conversationBusy
+    )
+      return;
+    const owner = project;
     const target = path ?? (await api.pickProject());
-    if (!target || target === project?.root) return;
+    if (!target || target === project?.root || project !== owner) return;
     // A project has one window: bring it forward rather than open it twice.
     const others = await api.otherWindows();
-    if (restoring || explorer.busy) return;
+    if (
+      project !== owner ||
+      restoring ||
+      explorer.busy ||
+      runLoading ||
+      settingsBusy ||
+      conversationBusy
+    )
+      return;
     if (inNewWindow || projectLocked || others.projects.includes(target)) {
       await api.newWindow(target);
       return;
     }
-    if (!(await protectDirty()) || restoring || explorer.busy) return;
+    if (
+      !(await protectDirty()) ||
+      project !== owner ||
+      restoring ||
+      explorer.busy ||
+      runLoading ||
+      settingsBusy ||
+      conversationBusy
+    )
+      return;
+    // A completion may dispatch a queued task while the file dialog is open.
+    // Its draft and ACK must remain owned by this project.
+    if (projectLocked) {
+      await api.newWindow(target);
+      return;
+    }
     persistWorkspace();
     const saved = readWorkspaces(localStorage).projects[target];
     restoring = true;
@@ -1119,12 +1397,13 @@
       historyError = '';
       titleRevisions.clear();
       runStatusRevisions.clear();
+      completedTurns.clear();
       liveRunStatuses.clear();
       readingViews.clear();
       timelineScope = 'conversation';
       drafts.clear();
       clearDraft();
-      queued = null;
+      taskQueues = {};
       taskSettings = null;
       git = project.git;
       threadId = project.lastThreadId ?? null;
@@ -1307,6 +1586,9 @@
       effort,
     };
   }
+  function validatedPrompt(draft: Draft): string {
+    return buildDraftPrompt(draft, project?.root ?? '');
+  }
   function restoreDraft(draft: Draft) {
     prompt = draft.prompt;
     permissionDraft = draft.permissions;
@@ -1371,6 +1653,7 @@
       (!prompt.trim() && !attachments.length && !contexts.length) ||
       starting ||
       queueSending ||
+      !!queue.sendingId ||
       attaching ||
       runLoading ||
       settingsBusy ||
@@ -1379,37 +1662,37 @@
     )
       return;
     const draft = currentDraft();
-    if (active) {
-      if (!waitForNextTurn && capabilities.steer) {
+    validatedPrompt(draft);
+    if (active || (waitForNextTurn && threadId)) {
+      if (active && !waitForNextTurn && capabilities.steer) {
         clearDraft();
         await steerDraft(draft, false);
         return;
       }
-      if (queued)
-        throw new Error(
-          'A follow-up is already queued. Edit or remove it first.',
-        );
-      queued = draft;
+      if (!threadId) return;
+      taskQueues[threadId] = appendQueue(queue, {
+        id: crypto.randomUUID(),
+        draft: { ...draft, overrides: true },
+      });
       queueComposerOpen = false;
-      queueError = '';
       clearDraft();
       return;
     }
     clearDraft();
     await sendDraft(draft);
   }
-  async function sendDraft(draft: Draft) {
+  async function sendDraft(draft: Draft, fromQueue = false) {
+    const full = validatedPrompt(draft);
+    const sourceThreadId = threadId;
+    const sourceHarness = draft.harness ?? selectedHarness;
     switchNotice = '';
     readingViews.follow(timelineKey);
     followRevision++;
     findOpen = false;
     findQuery = '';
     const original = draft.prompt;
-    const context = draft.contexts
-      .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
-      .join('');
-    const full = original + context;
     starting = true;
+    stopRequestedWhileStarting = false;
     error = '';
     taskSettings = null;
     taskPrompt =
@@ -1443,20 +1726,22 @@
     approvals = [];
     try {
       const result = await api.send(
-        threadId,
+        sourceThreadId,
         full,
         draft.overrides ? draft.model || null : null,
         draft.overrides ? draft.effort || null : null,
         draft.overrides ? draft.mode : null,
         draft.attachments.map((a) => a.id),
-        threadId
+        sourceThreadId
           ? { permissions: null, approvalPolicy: null }
           : draft.permissions,
-        draft.harness ?? selectedHarness,
+        sourceHarness,
       );
-      drafts.delete(`new:${draft.harness ?? selectedHarness}`);
-      rememberAgent(draft.harness ?? selectedHarness);
-      if (!threadId) rememberOpening(result.threadId, taskPrompt);
+      // Existing conversations must never delete another new conversation's draft.
+      // Baseline/start events can set threadId before this ACK, so use its origin.
+      if (!sourceThreadId) drafts.delete(`new:${sourceHarness}`);
+      rememberAgent(sourceHarness);
+      if (!sourceThreadId) rememberOpening(result.threadId, taskPrompt);
       threadId = result.threadId;
       if (
         !(turn as Turn | null) ||
@@ -1470,39 +1755,53 @@
           ? { ...i, threadId: result.threadId, turnId: result.turn.id }
           : i,
       );
+      if (stopRequestedWhileStarting) {
+        const observed = taskRuns[result.threadId]?.turn;
+        const accepted = observed?.id === result.turn.id ? observed : turn;
+        // Delivery already succeeded. A later interrupt error must never make
+        // this message retryable or put it back at the front of the queue.
+        if (accepted?.id === result.turn.id && accepted.status === 'inProgress')
+          await run(() => api.interrupt(result.threadId, result.turn.id));
+      }
     } catch (e) {
       fail(e);
       items = items.filter((i) => i.id !== optimisticId);
-      if (!prompt && !contexts.length && !attachments.length)
-        restoreDraft(draft);
-      else queued = draft;
+      if (!fromQueue) {
+        // Failed direct sends return to the composer without disturbing queued work.
+        prompt = [draft.prompt, prompt].filter(Boolean).join('\n\n');
+        contexts = [
+          ...new Map(
+            [...draft.contexts, ...contexts].map((c) => [c.id, c]),
+          ).values(),
+        ];
+        attachments = [
+          ...new Map(
+            [...draft.attachments, ...attachments].map((a) => [a.id, a]),
+          ).values(),
+        ];
+      }
       // A failed start does not imply that other threads disconnected.
       recordConnection(
         await api.state(selectedHarness, threadId).catch(() => connection),
       );
+      if (fromQueue) throw e;
     } finally {
+      stopRequestedWhileStarting = false;
       starting = false;
     }
   }
   async function sendQueuedNow() {
-    if (!queued || queueSending || navigationBusy) return;
-    if (!active) {
-      const draft = queued;
-      queued = null;
-      queueError = '';
-      await sendDraft(draft);
+    if (!threadId || !queue.entries.length || queue.sendingId || navigationBusy)
       return;
-    }
-    if (selectedHarness === 'claude') return;
-    await steerDraft(queued, true);
+    if (active && selectedHarness === 'claude') return;
+    await dispatchQueued(threadId, active);
   }
   async function steerDraft(draft: Draft, fromQueue: boolean) {
+    const full = validatedPrompt(draft);
     const id = threadId;
     const running = liveTurn?.status === 'inProgress' ? liveTurn : turn;
-    if (fromQueue) queueError = '';
     if (!id || running?.status !== 'inProgress') {
-      if (fromQueue) queued = null;
-      await sendDraft(draft);
+      await sendDraft(draft, fromQueue);
       return;
     }
     queueSending = true;
@@ -1533,17 +1832,13 @@
     readingViews.follow(timelineKey);
     followRevision++;
     try {
-      const context = draft.contexts
-        .map((c) => `\n\n--- Context: ${c.label} ---\n${c.text}`)
-        .join('');
       await api.steer(
         id,
         running.id,
-        draft.prompt + context,
+        full,
         draft.attachments.map((a) => a.id),
         optimisticId,
       );
-      if (fromQueue) queued = null;
       const pending = pendingSteers.get(optimisticId);
       if (pending) {
         const accepted: TimelineItem = { ...pending, delivery: 'accepted' };
@@ -1556,11 +1851,10 @@
       const unconfirmed = pendingSteers.delete(optimisticId);
       // If the matching user-message event arrived first, Codex already accepted it.
       if (!unconfirmed) {
-        if (fromQueue) queued = null;
         return;
       }
       items = items.filter((i) => i.id !== optimisticId);
-      if (fromQueue) queueError = `Message remains queued. ${String(e)}`;
+      if (fromQueue) throw e;
       else {
         // Preserve any context added while awaiting the reply, and keep Codex's current settings.
         prompt = [draft.prompt, prompt].filter(Boolean).join('\n\n');
@@ -1588,15 +1882,11 @@
     if (conversationBusy) return;
     if (action === 'archive') {
       const saved =
-        id === threadId
-          ? { prompt, attachments, contexts, queued }
-          : drafts.get(id);
+        id === threadId ? { prompt, attachments, contexts } : drafts.get(id);
       if (
-        saved &&
-        (saved.prompt ||
-          saved.attachments.length ||
-          saved.contexts.length ||
-          saved.queued)
+        taskQueues[id]?.entries.length ||
+        (saved &&
+          (saved.prompt || saved.attachments.length || saved.contexts.length))
       )
         throw new Error(
           'Send or remove this conversation’s draft and queued message before archiving.',
@@ -1616,6 +1906,7 @@
       if (action === 'rename') updateThreadName(id, name!.trim());
       if (action === 'archive') {
         delete taskRuns[id];
+        delete taskQueues[id];
         drafts.delete(id);
         if (id === threadId) await newTask();
       }
@@ -1645,15 +1936,28 @@
     await listThreads();
   }
   async function stop() {
+    pauseTaskQueue();
     const running = liveTurn?.status === 'inProgress' ? liveTurn : turn;
-    if (threadId && running?.id) await api.interrupt(threadId, running.id);
+    if (threadId && running?.status === 'inProgress') {
+      stopRequestedWhileStarting = false;
+      await api.interrupt(threadId, running.id);
+    } else if (starting) {
+      stopRequestedWhileStarting = true;
+    }
   }
   /** Starts a fresh conversation; `quiet` keeps the current view and focus. */
   async function newTask(
     nextHarness: Harness = selectedHarness,
     quiet = false,
   ) {
-    if (starting || queueSending || runLoading || attaching || settingsBusy)
+    if (
+      starting ||
+      queueSending ||
+      queue.sendingId ||
+      runLoading ||
+      attaching ||
+      settingsBusy
+    )
       return;
     stashDraft();
     const changedAgent = nextHarness !== selectedHarness;
@@ -1676,7 +1980,6 @@
     taskPrompt = '';
     liveDiff = '';
     touched = [];
-    queued = null;
     turns = [];
     turnCursor = null;
     itemCursor = null;
@@ -1733,7 +2036,14 @@
     }
   }
   async function resume(id: string) {
-    if (starting || queueSending || runLoading || attaching || settingsBusy)
+    if (
+      starting ||
+      queueSending ||
+      queue.sendingId ||
+      runLoading ||
+      attaching ||
+      settingsBusy
+    )
       return;
     if (threadId !== id) {
       stashDraft();
@@ -1926,6 +2236,8 @@
   function shortcut(e: KeyboardEvent) {
     if (e.defaultPrevented || document.querySelector('dialog[open]')) return;
     if (e.key === 'Escape') {
+      if (fileContextRequest) dismissContextPlaceholder('picker');
+      if (contextPreview) dismissContextPlaceholder('preview');
       if (findOpen) tick().then(() => timeline?.focusReader());
       findOpen = false;
       findQuery = '';
@@ -2051,6 +2363,11 @@
               if (entry.turn.status === 'inProgress') {
                 entry.turn = { ...entry.turn, status: 'connectionLost' };
                 updateRunStatus(id, 'connectionLost');
+                if (taskQueues[id])
+                  taskQueues[id] = pauseQueueAfterTurn(
+                    taskQueues[id],
+                    entry.turn,
+                  );
               }
             }
             if (
@@ -2149,6 +2466,16 @@
           }
         },
         'turn-completed': (p) => {
+          const seen = completedTurns.get(p.threadId) ?? new Set<string>();
+          const running = taskRuns[p.threadId]?.turn;
+          if (
+            seen.has(p.turn.id) ||
+            (running?.status === 'inProgress' && running.id !== p.turn.id)
+          )
+            return;
+          seen.add(p.turn.id);
+          if (seen.size > 200) seen.delete(seen.values().next().value!);
+          completedTurns.set(p.threadId, seen);
           updateRunStatus(
             p.threadId,
             completedRunStatus(
@@ -2162,6 +2489,11 @@
             title: taskRuns[p.threadId]?.title ?? 'Agent task',
             waiting: false,
           };
+          if (taskQueues[p.threadId])
+            taskQueues[p.threadId] = pauseQueueAfterTurn(
+              taskQueues[p.threadId],
+              p.turn,
+            );
           if (p.threadId !== threadId) {
             notify(
               p.threadId,
@@ -2180,16 +2512,6 @@
                   ? 'Interrupted'
                   : 'Failed — open to see why',
             );
-            const saved = drafts.get(p.threadId);
-            if (
-              saved?.queued &&
-              !saved.queueError &&
-              p.turn.status === 'completed'
-            ) {
-              const draft = saved.queued;
-              saved.queued = null;
-              run(() => sendBackground(p.threadId, draft));
-            }
             run(async () => {
               await Promise.allSettled([refreshGit(), checkFiles()]);
               treeVersion++;
@@ -2382,14 +2704,48 @@
           );
           return false;
         }
-        if (
-          anyActive &&
-          (await ask('Tasks are still running', question, [
-            title,
-            'Cancel',
-          ])) !== title
-        )
-          return false;
+        const pendingCount = Object.values(taskQueues).reduce(
+          (count, pending) => count + pending.entries.length,
+          0,
+        );
+        const sendingOrRunning = anyActive || queueSending;
+        if (sendingOrRunning || pendingCount || pendingDraftCount) {
+          const message = [
+            anyActive
+              ? question
+              : queueSending
+                ? 'A message is still waiting for acknowledgement. Leaving may interrupt its delivery.'
+                : 'Leave this window?',
+            pendingCount
+              ? `${pendingCount} queued ${pendingCount === 1 ? 'message will' : 'messages will'} be discarded. Queues are kept only while this window is open.`
+              : '',
+            pendingDraftCount
+              ? `${pendingDraftCount} unsent ${pendingDraftCount === 1 ? 'draft will' : 'drafts will'} be discarded, including captured context and attachment selections. Drafts are kept only while this window is open.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
+          const action = sendingOrRunning
+            ? title
+            : pendingCount
+              ? 'Discard queue and leave'
+              : 'Discard drafts and leave';
+          if (
+            (await ask(
+              anyActive
+                ? 'Tasks are still running'
+                : queueSending
+                  ? 'A message is still sending'
+                  : pendingCount
+                    ? 'Queued tasks will be discarded'
+                    : 'Unsent drafts will be discarded',
+              message,
+              [action, 'Cancel'],
+            )) !== action
+          )
+            return false;
+        }
+
         const finalWorkspace = workspaceSnapshot();
         if (!(await protectDirty()) || explorer.busy) return false;
         persistWorkspace(finalWorkspace);
@@ -2838,7 +3194,8 @@
               ></span>
             </div>{:then module}<module.default
               activeTask={active}
-              oncontext={addContext}
+              projectRoot={project?.root ?? ''}
+              onselection={addEditorSelection}
             />{:catch e}<p class="error">{String(e)}</p>{/await}{/if}
       {:else if view === 'Changes'}{#if reviewModule}{#await reviewModule}<div
               class="view-skeleton"
@@ -2974,25 +3331,24 @@
           >
             Multiple agents are working in this folder. Changes are shared.
           </p>{/if}
-        {#if queued}<QueueCard
-            {queued}
-            {queueSending}
-            {queueError}
+        {#if queue.entries.length}<QueueCard
+            {queue}
             {active}
             claude={selectedHarness === 'claude'}
             {agentLabel}
             {navigationBusy}
-            hasDraft={!!prompt || !!contexts.length || !!attachments.length}
             onsend={() => run(sendQueuedNow)}
-            onedit={() => {
-              restoreDraft(queued!);
-              queued = null;
-              queueError = '';
-            }}
-            onremove={() => {
-              queued = null;
-              queueError = '';
-            }}
+            onpause={pauseTaskQueue}
+            onresume={() => run(resumeTaskQueue)}
+            onbeginedit={(id) =>
+              updateQueue((value) => beginQueueEdit(value, id))}
+            oneditprompt={(text) => updateQueueEditor(text)}
+            oncanceledit={() => updateQueueEditor()}
+            onedit={(id, text) =>
+              updateQueue((value) => editQueue(value, id, text))}
+            onremove={(id) => updateQueue((value) => removeQueue(value, id))}
+            onmove={(id, direction) =>
+              updateQueue((value) => moveQueue(value, id, direction))}
           />{/if}
         {#if compactQueuedComposer}<button
             class="queue-compose-toggle"
@@ -3047,8 +3403,13 @@
                 ><button
                   class="context-label"
                   aria-label={`Preview context ${context.label}`}
-                  onclick={() => (contextPreview = context)}
-                  >{context.label}</button
+                  onclick={(event) =>
+                    previewContext(context, event.currentTarget)}
+                  >{context.label}{#if context.file}<small class="context-kind"
+                      >{context.file.kind === 'reference'
+                        ? 'reference'
+                        : 'frozen'}</small
+                    >{/if}</button
                 ><button
                   aria-label={`Remove ${context.label}`}
                   onclick={() =>
@@ -3113,7 +3474,7 @@
               attaching,
               canAttach:
                 !!project && !starting && !attaching && attachments.length < 8,
-              canAddContext: !!currentTab() && !starting,
+              canAddContext: !!currentTab() && !navigationBusy,
               canChangePermissions:
                 !!project && !starting && !runLoading && !restoring,
               permissionsLabel:
@@ -3138,9 +3499,10 @@
               canConnect: !busy && !!project,
               active,
               canSteer: capabilities.steer,
+              hasQueue: queue.entries.length > 0,
               canQueue:
                 !navigationBusy &&
-                !queued &&
+                queue.entries.length < MAX_QUEUED_MESSAGES &&
                 (!!prompt.trim() || !!attachments.length || !!contexts.length),
               queueSending,
               canSend:
@@ -3150,6 +3512,7 @@
                   !!contexts.length) &&
                 !starting &&
                 !queueSending &&
+                !queue.sendingId &&
                 !attaching &&
                 !runLoading &&
                 !settingsBusy &&
@@ -3157,15 +3520,7 @@
                 !restoring,
             }}
             onattach={() => run(attachFiles)}
-            onaddcontext={() => {
-              const tab = currentTab();
-              if (tab)
-                addContext({
-                  id: crypto.randomUUID(),
-                  label: tab.path,
-                  text: `File: ${tab.path}`,
-                });
-            }}
+            onaddcontext={openFileContext}
             onharness={(next) => run(() => switchHarness(next))}
             onpermissions={() => (sessionPanel = 'permissions')}
             onmode={(next) => run(() => changeThreadSettings({ mode: next }))}
@@ -3430,7 +3785,7 @@
       draft={permissionDraft}
       locked={active ||
         !!approvals.length ||
-        !!queued ||
+        queue.entries.length > 0 ||
         settingsBusy ||
         runLoading}
       onsettings={applyThreadSettings}
@@ -3439,32 +3794,88 @@
     />{/key}
 {/if}
 
-{#if contextPreview}<dialog
-    use:activateDialog
-    class="modal context-preview"
-    aria-label="Context preview"
-    oncancel={() => (contextPreview = null)}
-  >
-    <div class="context-preview-heading">
-      <div>
-        <span class="eyebrow">INCLUDED IN YOUR MESSAGE</span>
-        <h2>{contextPreview.label}</h2>
-      </div>
-      <button
-        aria-label="Close context preview"
-        onclick={() => (contextPreview = null)}>×</button
+{#if fileContextRequest && fileContextModule}
+  {#await fileContextModule}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Add file context"
+      oncancel={() => dismissContextPlaceholder('picker')}
+    >
+      <p>Opening file context…</p>
+      <button tabindex="0" onclick={() => dismissContextPlaceholder('picker')}
+        >Cancel</button
       >
-    </div>
-    <pre>{contextPreview.text.slice(0, 30000)}</pre>
-    <footer>
-      <span
-        >{contextPreview.text.length.toLocaleString()} characters{contextPreview
-          .text.length > 30000
-          ? ' · preview shortened'
-          : ''}</span
-      ><button onclick={() => (contextPreview = null)}>Back to message</button>
-    </footer>
-  </dialog>{/if}
+    </dialog>
+  {:then module}<module.default
+      path={fileContextRequest.path}
+      reference={fileContextRequest.reference}
+      snapshot={fileContextRequest.snapshot}
+      snapshotError={fileContextRequest.snapshotError}
+      dirty={fileContextRequest.dirty}
+      existingIds={contexts.map((context) => context.id)}
+      returnFocus={fileContextRequest.trigger}
+      onadd={commitFileContext}
+      onclose={() => (fileContextRequest = null)}
+    />
+  {:catch e}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Add file context"
+      oncancel={() => dismissContextPlaceholder('picker')}
+    >
+      <p class="error" role="alert">{String(e)}</p>
+      <button
+        tabindex="0"
+        onclick={() => (fileContextModule = loadFileContextPicker())}
+        >Retry</button
+      ><button tabindex="0" onclick={() => dismissContextPlaceholder('picker')}
+        >Cancel</button
+      >
+    </dialog>{/await}
+{/if}
+
+{#if contextPreview && contextPreviewModule}
+  {#await contextPreviewModule}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Context preview"
+      oncancel={() => dismissContextPlaceholder('preview')}
+    >
+      <p>Opening context…</p>
+      <button tabindex="0" onclick={() => dismissContextPlaceholder('preview')}
+        >Back to message</button
+      >
+    </dialog>
+  {:then module}<module.default
+      context={contextPreview}
+      canUpdate={canUpdateContext}
+      updateHint={contextUpdateHint}
+      returnFocus={contextPreviewTrigger}
+      onupdate={updatePreviewContext}
+      onremove={() => {
+        contexts = contexts.filter(
+          (context) => context.id !== contextPreview?.id,
+        );
+        contextPreview = null;
+      }}
+      onclose={() => (contextPreview = null)}
+    />
+  {:catch e}<dialog
+      use:activateDialog
+      class="modal"
+      aria-label="Context preview"
+      oncancel={() => dismissContextPlaceholder('preview')}
+    >
+      <p class="error" role="alert">{String(e)}</p>
+      <button
+        tabindex="0"
+        onclick={() => (contextPreviewModule = loadContextPreview())}
+        >Retry</button
+      ><button tabindex="0" onclick={() => dismissContextPlaceholder('preview')}
+        >Back to message</button
+      >
+    </dialog>{/await}
+{/if}
 
 {#if attachmentPreview}
   {#key attachmentPreview.id}<AttachmentPreview
