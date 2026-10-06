@@ -1,6 +1,6 @@
 [package]
 name = "bindaas"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A calm desktop workbench for Codex and Claude Code (unofficial, macOS)."
 license = "MIT"

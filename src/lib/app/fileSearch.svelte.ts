@@ -43,11 +43,12 @@ export class ProjectSearch {
     this.cancel();
     const sequence = this.#sequence;
     const text = query.trim();
-    if (!this.enabled() || !text) return;
+    if (!this.enabled()) return onresult(null);
+    if (!text) return onresult([]);
     this.#timer = setTimeout(async () => {
       try {
         const files = await this.search(text);
-        if (sequence === this.#sequence) onresult(files ?? []);
+        if (sequence === this.#sequence) onresult(files);
       } catch {
         if (sequence === this.#sequence) onresult(null);
       }
@@ -67,6 +68,8 @@ export class LauncherSearch {
   query(query: string, scope: LaunchScope) {
     if (!query.trim() || scope === 'Actions' || scope === 'Tasks')
       return this.reset();
+    // Project hits bypass local filtering, so they belong only to their query.
+    this.matches = [];
     this.searching = true;
     this.search.run(query, (files) => {
       this.searching = false;

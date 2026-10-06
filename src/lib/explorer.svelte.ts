@@ -4,11 +4,19 @@ export type ExplorerEdit =
   | { mode: 'create'; parent: string; directory: boolean }
   | { mode: 'rename'; parent: string; path: string; name: string };
 
+export type ExplorerOperation = {
+  token: number;
+  kind: 'create' | 'rename' | 'trash';
+  path: string;
+  message: string;
+};
+
 export const explorer = $state<{
   selected: string;
   editing: ExplorerEdit | null;
   error: string;
   busy: boolean;
+  operation: ExplorerOperation | null;
   note: string;
   revisions: Record<string, number>;
 }>({
@@ -16,11 +24,23 @@ export const explorer = $state<{
   editing: null,
   error: '',
   busy: false,
+  operation: null,
   note: '',
   revisions: {},
 });
 
 let noteTimer: ReturnType<typeof setTimeout> | undefined;
+/** Replacing a project invalidates any pending operation's UI ownership. */
+export function resetExplorer() {
+  clearTimeout(noteTimer);
+  explorer.selected = '';
+  explorer.editing = null;
+  explorer.error = '';
+  explorer.busy = false;
+  explorer.operation = null;
+  explorer.note = '';
+  explorer.revisions = {};
+}
 /** A short confirmation under the tree ("Path copied", "Created …"). */
 export function noteExplorer(message: string) {
   explorer.note = message;

@@ -21,6 +21,7 @@
     canConnect: boolean;
     active: boolean;
     canSteer: boolean;
+    hasQueue: boolean;
     canQueue: boolean;
     queueSending: boolean;
     canSend: boolean;
@@ -47,7 +48,7 @@
   }: {
     c: ComposerState;
     onattach: () => void;
-    onaddcontext: () => void;
+    onaddcontext: (trigger: HTMLElement) => void;
     onharness: (harness: Harness) => void;
     onpermissions: () => void;
     onmode: (mode: CollaborationMode) => void;
@@ -69,8 +70,11 @@
     >
     <button
       class="context-button"
+      aria-label="Add file context for current editor"
+      tabindex="0"
       disabled={!c.canAddContext}
-      onclick={onaddcontext}><Icon name="plus" size={14} /> Context</button
+      onclick={(event) => onaddcontext(event.currentTarget)}
+      ><Icon name="plus" size={14} /> Context</button
     >
   </div>
   <div class="model-controls">
@@ -146,12 +150,12 @@
       >{/if}
   </div>
   <div class="send-controls">
-    {#if c.active && c.canSteer}<button
+    {#if (c.active && c.canSteer) || (!c.active && c.hasQueue)}<button
         class="queue-next-button"
         aria-label="Queue for next turn"
         disabled={!c.canQueue}
-        title="Wait until the current turn finishes"
-        onclick={onqueue}>Queue next</button
+        title="Add a follow-up to the end of this conversation’s queue"
+        onclick={onqueue}>{c.hasQueue ? 'Add to queue' : 'Queue next'}</button
       >{/if}{#if c.active}<button
         class="stop"
         title="Stop the running task"

@@ -180,7 +180,23 @@ export type Connection = {
   waitingThreads?: string[];
   approvals?: number;
 };
-export type Context = { id: string; label: string; text: string };
+export type Context = {
+  id: string;
+  label: string;
+  text: string;
+  readonly file?: Readonly<{
+    kind: 'reference' | 'snapshot' | 'selection';
+    projectRoot: string;
+    path: string;
+    directory?: boolean;
+    dirty?: boolean;
+    fromLine?: number;
+    toLine?: number;
+    /** UTF-16 editor positions; the end is exclusive. */
+    fromOffset?: number;
+    toOffset?: number;
+  }>;
+};
 export type Tab = {
   path: string;
   data?: FileData;
@@ -189,6 +205,11 @@ export type Tab = {
   editing: boolean;
   mode: 'edit' | 'preview' | 'split';
   conflict?: string;
+  /** Includes confirmation and the pending write/read; typing remains allowed. */
+  saving?: boolean;
+  reloading?: boolean;
+  /** A filesystem mutation owns this path; edits resume when it settles. */
+  fileOperation?: 'rename' | 'trash';
   cursor: number;
   scroll: number;
 };

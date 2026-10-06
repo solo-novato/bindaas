@@ -23,27 +23,74 @@
   } from '@codemirror/language';
   import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
   import { language } from '../languages';
-  import type { Tab, Context } from '../types';
+  import type { Tab } from '../types';
+  import {
+    MAX_FROZEN_CONTEXT_BYTES,
+    type FileSelectionCapture,
+  } from '../fileContext';
   let {
     tab,
     onchange,
-    oncontext,
+    projectRoot,
+    onselection,
   }: {
     tab: Tab;
     onchange: (text: string) => void;
-    oncontext: (context: Context) => void;
+    projectRoot: string;
+    onselection: (
+      capture: FileSelectionCapture & { projectRoot: string },
+    ) => void;
   } = $props();
   let host: HTMLDivElement;
   let view: EditorView | undefined;
-  let selected = $state<{ text: string; from: number; to: number } | null>(
-    null,
-  );
+  let selected = $state<{
+    owner: Tab;
+    capture: FileSelectionCapture & { projectRoot: string };
+    tooLarge: boolean;
+  } | null>(null);
+  function rememberSelection(state: EditorState) {
+    const range = state.selection.main;
+    tab.cursor = range.head;
+    const tooLarge = range.to - range.from > MAX_FROZEN_CONTEXT_BYTES;
+    selected = range.empty
+      ? null
+      : {
+          owner: tab,
+          tooLarge,
+          capture: {
+            projectRoot,
+            path: tab.path,
+            dirty: tab.dirty,
+            text: tooLarge ? '' : state.sliceDoc(range.from, range.to),
+            fromOffset: range.from,
+            toOffset: range.to,
+            fromLine: state.doc.lineAt(range.from).number,
+            toLine: state.doc.lineAt(Math.max(range.from, range.to - 1)).number,
+          },
+        };
+  }
+  function addSelection() {
+    if (
+      !selected ||
+      selected.tooLarge ||
+      tab.fileOperation ||
+      selected.owner !== tab ||
+      selected.capture.projectRoot !== projectRoot
+    )
+      return;
+    // A rename preserves this tab and its editor state. Capture its current
+    // source path and saved state when Add is pressed.
+    onselection({ ...selected.capture, path: tab.path, dirty: tab.dirty });
+  }
   let error = $state('');
   let mounted = $state(false);
   const editable = new Compartment(),
-    grammar = new Compartment();
+    grammar = new Compartment(),
+    access = new Compartment(),
+    fileIdentity = new Compartment();
   let current = '';
   let previousEditing = false;
+  let previousReserved = false;
   let previousTab: Tab | undefined;
   let request = 0;
   const theme = EditorView.theme(
@@ -68,8 +115,6 @@
   );
   function mode(editing: boolean) {
     return [
-      EditorState.readOnly.of(!editing),
-      EditorView.editable.of(editing),
       ...(editing
         ? [
             history(),
@@ -87,6 +132,17 @@
         : []),
     ];
   }
+  function editAccess(editing: boolean, reserved: boolean) {
+    return [
+      EditorState.readOnly.of(!editing || reserved),
+      EditorView.editable.of(editing && !reserved),
+    ];
+  }
+  function identity(path: string) {
+    return EditorView.contentAttributes.of({
+      'aria-label': `File contents: ${path}`,
+    });
+  }
   onMount(() => {
     view = new EditorView({
       parent: host,
@@ -100,19 +156,12 @@
           theme,
           editable.of([]),
           grammar.of([]),
+          access.of([]),
+          fileIdentity.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onchange(update.state.doc.toString());
-            if (update.selectionSet) {
-              const range = update.state.selection.main;
-              tab.cursor = range.head;
-              selected = range.empty
-                ? null
-                : {
-                    text: update.state.sliceDoc(range.from, range.to),
-                    from: update.state.doc.lineAt(range.from).number,
-                    to: update.state.doc.lineAt(range.to).number,
-                  };
-            }
+            if (update.selectionSet || update.docChanged)
+              rememberSelection(update.state);
           }),
         ],
       }),
@@ -129,40 +178,32 @@
   $effect(() => {
     const path = tab.path,
       text = tab.content ?? '',
-      editing = tab.editing;
+      editing = tab.editing,
+      reserved = !!tab.fileOperation;
     const ready = mounted;
     if (!ready || !view) return;
-    if (current !== path) {
+    const changedTab = previousTab !== tab;
+    if (changedTab) {
       if (previousTab && view) previousTab.scroll = view.scrollDOM.scrollTop;
       previousTab = tab;
       previousEditing = editing;
-      current = path;
+      previousReserved = reserved;
       selected = null;
       const extensions = [
         lineNumbers(),
-        EditorView.contentAttributes.of({
-          'aria-label': `File contents: ${path}`,
-        }),
+        fileIdentity.of(identity(path)),
         drawSelection(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle),
         keymap.of(searchKeymap),
         theme,
         editable.of(mode(editing)),
+        access.of(editAccess(editing, reserved)),
         grammar.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onchange(update.state.doc.toString());
-          if (update.selectionSet) {
-            const range = update.state.selection.main;
-            tab.cursor = range.head;
-            selected = range.empty
-              ? null
-              : {
-                  text: update.state.sliceDoc(range.from, range.to),
-                  from: update.state.doc.lineAt(range.from).number,
-                  to: update.state.doc.lineAt(range.to).number,
-                };
-          }
+          if (update.selectionSet || update.docChanged)
+            rememberSelection(update.state);
         }),
       ];
       view.setState(
@@ -173,14 +214,13 @@
         }),
       );
       view.scrollDOM.scrollTop = tab.scroll;
-      const ticket = ++request;
-      language(path)
-        .then((lang) => {
-          if (ticket === request && view)
-            view.dispatch({ effects: grammar.reconfigure(lang) });
-        })
-        .catch((e) => (error = String(e)));
     } else {
+      if (previousEditing !== editing || previousReserved !== reserved) {
+        previousReserved = reserved;
+        view.dispatch({
+          effects: access.reconfigure(editAccess(editing, reserved)),
+        });
+      }
       if (previousEditing !== editing) {
         previousEditing = editing;
         view.dispatch({ effects: editable.reconfigure(mode(editing)) });
@@ -190,6 +230,20 @@
           changes: { from: 0, to: view.state.doc.length, insert: text },
         });
     }
+    if (changedTab || current !== path) {
+      current = path;
+      error = '';
+      view.dispatch({ effects: fileIdentity.reconfigure(identity(path)) });
+      const ticket = ++request;
+      language(path)
+        .then((lang) => {
+          if (ticket === request && view)
+            view.dispatch({ effects: grammar.reconfigure(lang) });
+        })
+        .catch((cause) => {
+          if (ticket === request) error = String(cause);
+        });
+    }
   });
 </script>
 
@@ -197,10 +251,10 @@
 <div class="code-host" bind:this={host}></div>
 {#if selected}<button
     class="selection-action"
-    onclick={() =>
-      oncontext({
-        id: crypto.randomUUID(),
-        label: `${tab.path} · lines ${selected!.from}–${selected!.to}`,
-        text: `File: ${tab.path}\nLines: ${selected!.from}–${selected!.to}\n\n${selected!.text}`,
-      })}>Ask Codex about selection ↗</button
+    aria-label="Add selection to message"
+    disabled={selected.tooLarge || !!tab.fileOperation}
+    title={selected.tooLarge
+      ? 'Choose a smaller selection (up to 64 KiB including its source header).'
+      : 'Add this exact editor selection without saving the file'}
+    onclick={addSelection}>Add selection to message ↗</button
   >{/if}

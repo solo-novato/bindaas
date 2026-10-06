@@ -78,12 +78,26 @@ export const api = {
     invoke<void>('file_reveal_in_system', { relativePath }),
   openDefault: (relativePath: string) =>
     invoke<void>('file_open_default', { relativePath }),
-  createEntry: (parent: string, name: string, directory: boolean) =>
-    invoke<string>('file_create', { parent, name, directory }),
-  renameEntry: (relativePath: string, name: string) =>
-    invoke<string>('file_rename', { relativePath, name }),
-  trashEntry: (relativePath: string) =>
-    invoke<void>('file_trash', { relativePath }),
+  createEntry: (
+    parent: string,
+    name: string,
+    directory: boolean,
+    expectedProjectRoot: string,
+  ) =>
+    invoke<string>('file_create', {
+      parent,
+      name,
+      directory,
+      expectedProjectRoot,
+    }),
+  renameEntry: (
+    relativePath: string,
+    name: string,
+    expectedProjectRoot: string,
+  ) =>
+    invoke<string>('file_rename', { relativePath, name, expectedProjectRoot }),
+  trashEntry: (relativePath: string, expectedProjectRoot: string) =>
+    invoke<void>('file_trash', { relativePath, expectedProjectRoot }),
   searchFiles: (query: string) =>
     invoke<FileMatch[]>('project_file_search', { query }),
   revertThread: (threadId: string, beforeTurnId: string) =>

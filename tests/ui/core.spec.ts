@@ -167,7 +167,7 @@ test('project switcher opens other projects in a new window without interrupting
   await page.locator('.project-button').click();
   const picker = page.getByRole('dialog', { name: 'Switch project' });
   await expect(picker).toContainText(
-    'Tasks are running here, so other projects open in a new window.',
+    'This window has work to keep, so other projects open in a new window.',
   );
   await expect(
     picker.getByRole('button', { name: 'Open another folder…' }),

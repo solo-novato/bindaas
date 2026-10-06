@@ -338,66 +338,338 @@ main > .composer-area {
   gap: 10px;
 }
 
+/* The queue gives space back to the composer; only its ordered list scrolls. */
 main > .composer-area:has(.queue-card) {
-  min-height: 270px;
+  min-height: 260px;
+  overflow-y: hidden;
+}
+
+main > .composer-area:has(.queue-card) .composer-inner {
+  flex-shrink: 0;
 }
 
 .queue-card {
-  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 260px;
   width: 100%;
-  max-width: 1100px;
+  max-width: var(--reading-width);
   margin-inline: auto;
-  border: 1px solid var(--accent);
-  border-radius: 12px;
-  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  padding: 9px 12px;
   background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  gap: 7px;
+}
+
+.queue-heading,
+.queue-title,
+.queue-heading-actions,
+.queue-actions,
+.queue-entry-actions,
+.queue-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .queue-heading,
 .queue-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-shrink: 0;
+  justify-content: space-between;
+}
+
+.queue-title {
   flex-wrap: wrap;
+  min-width: 0;
+  gap: 7px;
 }
 
 .queue-heading strong {
+  font-size: var(--fs-sm);
+  font-weight: 600;
   color: var(--text);
 }
 
-.queue-heading span,
-.queue-actions small {
+.queue-count {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
   color: var(--muted);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.queue-content {
-  max-height: 90px;
-  overflow: auto;
-  margin: 8px 0;
+.queue-paused {
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}
+
+.queue-heading-actions {
+  flex-shrink: 0;
+  gap: 3px;
+}
+
+.queue-card button {
+  min-height: 26px;
+  padding: 3px 7px;
+  font-size: var(--fs-xs);
+  border-radius: var(--r-sm);
+}
+
+.queue-pause,
+.queue-expand,
+.queue-actions .primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.queue-pause,
+.queue-expand {
+  color: var(--muted);
+}
+
+.queue-expanded .queue-expand svg {
+  transform: rotate(180deg);
+}
+
+.queue-pause-glyph {
+  width: 7px;
+  height: 9px;
+  border-inline: 2px solid currentColor;
+}
+
+.queue-play-glyph {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+}
+
+.queue-list {
+  flex: 1 1 auto;
+  min-height: 42px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-block: 1px solid var(--border);
+}
+
+.queue-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 0;
+}
+
+.queue-entry + .queue-entry {
+  border-top: 1px solid var(--line-soft);
+}
+
+.queue-position {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 21px;
+  height: 21px;
+  margin-top: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 500 var(--fs-xs) var(--mono);
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.queue-entry:first-child .queue-position {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.queue-entry-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-prompt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   overflow-wrap: anywhere;
-}
-
-.queue-content p {
   white-space: pre-wrap;
   margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.queue-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 4px;
+}
+
+.queue-mode,
+.queue-next,
+.queue-chip {
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.queue-mode {
+  color: var(--muted);
+}
+
+.queue-mode-plan {
+  color: var(--accent-2);
+}
+
+.queue-next {
+  color: var(--muted);
+}
+
+.queue-next::before {
+  content: '·';
+  margin-right: 6px;
 }
 
 .queue-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(200px, 100%);
+  padding: 1px 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  margin: 6px 6px 0 0;
-  padding: 2px 6px;
-  font-size: var(--fs-sm);
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.queue-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-entry-actions {
+  flex-shrink: 0;
+  gap: 1px;
+}
+
+.queue-entry-actions > button {
+  color: var(--muted);
+}
+
+.queue-entry-actions .queue-remove:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.queue-move-controls {
+  display: flex;
+  gap: 1px;
+  padding-right: 4px;
+  margin-right: 3px;
+  border-right: 1px solid var(--border);
+}
+
+.queue-card .queue-move {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.queue-move-down svg {
+  transform: rotate(180deg);
 }
 
 .queue-actions small {
-  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.queue-actions .primary {
+  flex-shrink: 0;
+  padding-inline: 9px;
 }
 
 .queue-error {
+  flex-shrink: 0;
+  max-height: 42px;
+  overflow-y: auto;
+  margin: 0;
   color: var(--red);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.queue-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 66px;
+  max-height: 120px;
+  padding: 7px 9px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  background: var(--bg);
+  border-color: var(--border-strong);
+}
+
+.queue-edit-actions {
+  flex-wrap: wrap;
+  margin-top: 7px;
+  gap: 4px;
+}
+
+.queue-edit-actions > span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.queue-entry-sending .queue-entry-body {
+  opacity: 0.65;
+}
+
+@media (max-width: 1100px) {
+  .queue-entry {
+    flex-wrap: wrap;
+    gap: 5px 8px;
+  }
+
+  .queue-entry-actions {
+    margin-left: auto;
+  }
+}
+
+@media (max-height: 760px) {
+  .queue-card {
+    max-height: 215px;
+    gap: 5px;
+    padding-block: 7px;
+  }
+
+  .queue-entry {
+    padding-block: 7px;
+  }
 }
 
 main > .composer-area.compact-queued {
@@ -588,28 +860,6 @@ main > .composer-area .composer-inner:focus-within {
   font-size: 18px;
 }
 
-.queue-card {
-  padding: 10px 14px;
-  border-color: var(--accent-line);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-soft);
-}
-
-.queue-heading span,
-.queue-actions small,
-.queue-chip {
-  font-size: var(--fs-xs);
-}
-
-.queue-actions button:not(.primary) {
-  border: 1px solid var(--border);
-  font-size: var(--fs-xs);
-}
-
-.queue-actions .primary {
-  font-size: var(--fs-xs);
-}
-
 main > .composer-area {
   background: transparent;
 }
@@ -655,6 +905,8 @@ main > .composer-area .composer-inner {
   animation: pop-in 300ms var(--ease-spring);
 }
 
-.queue-card {
-  animation: rise-in 360ms var(--ease-spring);
+.context-kind {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
 }

@@ -2,10 +2,12 @@
   // Project explorer: header actions, the lazy file tree, and its empty state.
   import Icon from './Icon.svelte';
   import Tree from './Tree.svelte';
+  import { explorer } from '../explorer.svelte';
   import type { TreeAction } from './TreeMenu.svelte';
   import type { Entry, Project } from '../types';
   let {
     project,
+    blocked = false,
     treeVersion,
     showHidden = $bindable(),
     changed,
@@ -23,6 +25,7 @@
     oncommit,
   }: {
     project: Project | null;
+    blocked?: boolean;
     treeVersion: number;
     showHidden: boolean;
     changed: string[];
@@ -53,19 +56,19 @@
       <button
         title="New file"
         aria-label="New file"
-        disabled={!project}
+        disabled={!project || blocked || explorer.busy}
         onclick={() => oncreate(false)}
         ><Icon name="file-plus" size={15} /></button
       ><button
         title="New folder"
         aria-label="New folder"
-        disabled={!project}
+        disabled={!project || blocked || explorer.busy}
         onclick={() => oncreate(true)}
         ><Icon name="folder-plus" size={15} /></button
       ><button
         title="Refresh expanded tree"
         aria-label="Refresh file tree"
-        disabled={!project}
+        disabled={!project || blocked || explorer.busy}
         onclick={onrefresh}><Icon name="refresh" size={14} /></button
       ><button aria-label="Collapse explorer" onclick={oncollapse}
         ><Icon name="panel-left" size={15} /></button
@@ -97,10 +100,25 @@
           {oncommit}
         />{/key}
     </div>
+    {#if explorer.operation}<p class="explorer-note" role="status">
+        {explorer.operation.message}
+      </p>{/if}
+    {#if explorer.error && !explorer.editing}<div
+        class="banner error"
+        role="alert"
+      >
+        <span>{explorer.error}</span><button
+          aria-label="Dismiss file action error"
+          onclick={() => (explorer.error = '')}>×</button
+        >
+      </div>{/if}
     {#if note}<p class="explorer-note" role="status">
         {note}
       </p>{/if}
-    <button class="tree-footer" onclick={() => (showHidden = !showHidden)}
+    <button
+      class="tree-footer"
+      disabled={blocked || explorer.busy}
+      onclick={() => (showHidden = !showHidden)}
       >{showHidden
         ? 'Hide hidden / generated'
         : 'Show hidden / generated'}</button

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import Icon from './Icon.svelte';
   import {
     editor,
@@ -11,13 +12,34 @@
   } from '../editor.svelte';
   import { api } from '../api';
   import { ask } from '../dialog.svelte';
-  import type { Context } from '../types';
+  import type { Tab } from '../types';
+  import type { FileSelectionCapture } from '../fileContext';
   let {
     activeTask,
-    oncontext,
-  }: { activeTask: boolean; oncontext: (context: Context) => void } = $props();
+    projectRoot,
+    onselection,
+  }: {
+    activeTask: boolean;
+    projectRoot: string;
+    onselection: (
+      capture: FileSelectionCapture & { projectRoot: string },
+    ) => void;
+  } = $props();
   const tab = $derived(currentTab());
-  let compare = $state<string | null>(null);
+  let workspace: HTMLDivElement;
+  let comparisonFor = $state<Tab | null>(null);
+  let comparisonPath = $state('');
+  const loadConflictReview = () => import('./FileConflictReview.svelte');
+  let conflictComponent = $state<ReturnType<typeof loadConflictReview> | null>(
+    null,
+  );
+  $effect(() => {
+    if (
+      comparisonFor &&
+      (comparisonFor !== tab || comparisonPath !== tab?.path)
+    )
+      comparisonFor = null;
+  });
   const loadEditor = () => import('./CodeEditor.svelte');
   let editorComponent = $state<ReturnType<typeof loadEditor> | null>(null);
   $effect(() => {
@@ -41,7 +63,8 @@
       markdownComponent = loadMarkdown();
   });
   async function startEdit() {
-    if (!tab) return;
+    const target = tab;
+    if (!target || target.fileOperation) return;
     if (
       tab.data?.readOnlyRecommended &&
       (await ask(
@@ -51,28 +74,46 @@
       )) !== 'Edit'
     )
       return;
-    tab.editing = true;
-    tab.mode = 'edit';
+    if (tab !== target || target.fileOperation) return;
+    target.editing = true;
+    target.mode = 'edit';
   }
-  async function compareDisk() {
-    if (tab) {
-      try {
-        compare = (await api.read(tab.path)).content ?? 'Preview unavailable';
-      } catch (e) {
-        editor.error = String(e);
-      }
-    }
+  async function closeComparison() {
+    const previous = comparisonFor;
+    comparisonFor = null;
+    await tick();
+    if (tab !== previous) return;
+    const target =
+      workspace?.querySelector<HTMLElement>(
+        '.cm-content[contenteditable="true"]',
+      ) ??
+      workspace?.querySelector<HTMLElement>(
+        '.file-conflict-banner button:not(:disabled)',
+      ) ??
+      workspace?.querySelector<HTMLElement>(
+        '.file-toolbar button:not(:disabled)',
+      );
+    target?.focus({ preventScroll: true });
+  }
+  function compareDisk() {
+    if (!tab || tab.fileOperation) return;
+    comparisonFor = tab;
+    comparisonPath = tab.path;
+    conflictComponent ??= loadConflictReview();
   }
 </script>
 
-<div class="file-workspace">
+<div class="file-workspace" bind:this={workspace}>
   <div class="file-tabs">
     {#each editor.tabs as t (t.path)}<div
         class:chosen={editor.active === t.path}
       >
         <button onclick={() => openFile(t.path)} title={t.path}
           >{t.path.split('/').at(-1)}{t.dirty ? ' ●' : ''}</button
-        ><button aria-label={`Close ${t.path}`} onclick={() => closeTab(t.path)}
+        ><button
+          aria-label={`Close ${t.path}`}
+          disabled={!!t.fileOperation}
+          onclick={() => closeTab(t.path)}
           ><Icon name="close" size={13} /></button
         >
       </div>{/each}
@@ -104,9 +145,14 @@
         </div>{/if}
       {#if tab.data.encoding === 'utf8'}{#if tab.editing}<button
             class="primary"
-            disabled={!tab.dirty}
+            disabled={!tab.dirty ||
+              tab.saving ||
+              tab.reloading ||
+              !!tab.fileOperation}
             onclick={() => saveTab()}>Save <kbd>⌘S</kbd></button
-          >{:else}<button onclick={startEdit}>Edit</button>{/if}{/if}
+          >{:else}<button disabled={!!tab.fileOperation} onclick={startEdit}
+            >Edit</button
+          >{/if}{/if}
       <button
         title="Show containing folder"
         aria-label="Show containing folder"
@@ -115,28 +161,41 @@
         ><Icon name="folder-open" size={16} /></button
       >
     </div>
+    {#if tab.fileOperation}<div class="banner" role="status">
+        {tab.fileOperation === 'rename'
+          ? 'Renaming this file…'
+          : 'Moving this file to Trash…'} Editing is paused until the action finishes.
+      </div>{/if}
     {#if tab.editing && activeTask}<div class="banner">
-        Codex is working and may modify this file. Unsaved edits stay in your
+        An agent is working and may modify this file. Unsaved edits stay in your
         buffer.
       </div>{/if}
-    {#if tab.conflict}<div class="banner warning">
-        <span>{tab.conflict}</span><button onclick={compareDisk}>Compare</button
-        ><button onclick={() => reloadTab()}>Reload disk</button><button
-          onclick={() => (compare = null)}>Keep mine</button
+    {#if tab.conflict && comparisonFor !== tab}<div
+        class="banner warning file-conflict-banner"
+      >
+        <span>{tab.conflict}</span><button
+          disabled={tab.saving || tab.reloading || !!tab.fileOperation}
+          onclick={compareDisk}>Compare</button
+        ><button
+          disabled={tab.saving || tab.reloading || !!tab.fileOperation}
+          onclick={() => reloadTab(tab)}>Reload disk</button
         >
       </div>{/if}
-    {#if compare !== null}<div class="compare">
-        <div>
-          <h4>Your unsaved content</h4>
-          <pre>{tab.content?.slice(0, 100000)}</pre>
-        </div>
-        <div>
-          <h4>Current disk content</h4>
-          <pre>{compare.slice(0, 100000)}</pre>
-        </div>
-        <button onclick={() => (compare = null)}>Close comparison</button>
-      </div>
-    {:else if tab.data.encoding !== 'utf8'}<div class="empty">
+    {#if comparisonFor === tab && conflictComponent}
+      {#await conflictComponent}<p class="muted padded">
+          Loading comparison…
+        </p>{:then module}
+        {#key comparisonFor}<module.default
+            {tab}
+            onclose={() => void closeComparison()}
+          />{/key}
+      {:catch error}<div class="banner error">
+          Could not open comparison: {String(error)}<button
+            onclick={() => void closeComparison()}>Keep editing</button
+          >
+        </div>{/await}
+    {/if}
+    {#if tab.data.encoding !== 'utf8'}<div class="empty">
         <h2>
           {tab.data.encoding === 'binary'
             ? 'Binary file'
@@ -148,14 +207,19 @@
         </p>
         <button onclick={() => api.reveal(tab.path)}>Show in folder</button>
       </div>
-    {:else}<div class="file-content" class:split={tab.mode === 'split'}>
+    {:else}<div
+        class="file-content"
+        class:split={tab.mode === 'split'}
+        hidden={comparisonFor === tab}
+      >
         {#if tab.mode !== 'preview' && editorComponent}<div class="editor-wrap">
             {#await editorComponent}<p class="muted padded">
                 Loading editor…
               </p>{:then module}<module.default
                 {tab}
                 onchange={editContent}
-                {oncontext}
+                {projectRoot}
+                {onselection}
               />{:catch error}<p class="error">{String(error)}</p>{/await}
           </div>{/if}
         {#if tab.mode !== 'edit' && markdownComponent}{#await markdownComponent}<p
