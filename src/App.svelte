@@ -29,7 +29,7 @@
     currentTab,
   } from './lib/editor.svelte';
   import { dialog, ask, answer } from './lib/dialog.svelte';
-  import { explorer } from './lib/explorer.svelte';
+  import { explorer, resetExplorer } from './lib/explorer.svelte';
   import TreeMenu, { type TreeAction } from './lib/components/TreeMenu.svelte';
   import {
     mergeItem,
@@ -1006,6 +1006,8 @@
   const { selectedFolder, startCreate, treeAction, commitName } =
     createExplorerActions({
       root: () => project?.root ?? null,
+      scope: () => project,
+      ready: () => !!project && !restoring,
       discovered: () => discovered,
       setDiscovered: (entries) => (discovered = entries),
       expanded: () => expandedFolders,
@@ -1014,6 +1016,47 @@
       addContext,
       fail,
     });
+  async function explorerAction(
+    entry: Entry | null,
+    action: TreeAction,
+    trigger?: HTMLElement | null,
+  ) {
+    const owner = project;
+    const target =
+      trigger ??
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>('.tree-row'),
+      ).find((row) => row.title === entry?.path);
+    const pane = target?.closest('aside');
+    try {
+      await treeAction(entry, action);
+    } finally {
+      if (action === 'trash') {
+        await tick();
+        const focused = document.activeElement;
+        const restore =
+          !focused ||
+          focused === document.body ||
+          focused === document.documentElement ||
+          focused === target;
+        if (
+          project === owner &&
+          restore &&
+          !document.querySelector('dialog[open]')
+        ) {
+          if (
+            target?.isConnected &&
+            discovered.some((file) => file.path === entry?.path)
+          )
+            target.focus();
+          else
+            pane
+              ?.querySelector<HTMLButtonElement>('[aria-label="New file"]')
+              ?.focus();
+        }
+      }
+    }
+  }
   // Project file search for ⌘P and @ mentions (see lib/app/fileSearch).
   const projectSearch = new ProjectSearch(
     (query) => api.searchFiles(query),
@@ -1043,17 +1086,17 @@
     !!project && (anyActive || approvals.length > 0 || attaching),
   );
   async function chooseProject(path?: string, inNewWindow = false) {
-    if (restoring) return;
+    if (restoring || explorer.busy) return;
     const target = path ?? (await api.pickProject());
     if (!target || target === project?.root) return;
     // A project has one window: bring it forward rather than open it twice.
     const others = await api.otherWindows();
-    if (restoring) return;
+    if (restoring || explorer.busy) return;
     if (inNewWindow || projectLocked || others.projects.includes(target)) {
       await api.newWindow(target);
       return;
     }
-    if (!(await protectDirty()) || restoring) return;
+    if (!(await protectDirty()) || restoring || explorer.busy) return;
     persistWorkspace();
     const saved = readWorkspaces(localStorage).projects[target];
     restoring = true;
@@ -1095,6 +1138,7 @@
       touched = [];
       selectedPath = '';
       baseline = [];
+      resetExplorer();
       resetEditor();
       discovered = [];
       treeVersion++;
@@ -2332,6 +2376,12 @@
       else fail(results2[1].reason);
       /** Confirms running tasks and unsaved files, then saves the workspace. */
       const readyToLeave = async (title: string, question: string) => {
+        if (explorer.busy) {
+          fail(
+            'Wait for the file action to finish before closing this window.',
+          );
+          return false;
+        }
         if (
           anyActive &&
           (await ask('Tasks are still running', question, [
@@ -2341,7 +2391,7 @@
         )
           return false;
         const finalWorkspace = workspaceSnapshot();
-        if (!(await protectDirty())) return false;
+        if (!(await protectDirty()) || explorer.busy) return false;
         persistWorkspace(finalWorkspace);
         return true;
       };
@@ -2455,7 +2505,7 @@
     {attentionTasks}
     {taskPing}
     {navigationBusy}
-    projectChanging={restoring}
+    projectChanging={restoring || explorer.busy}
     newTaskDisabled={starting ||
       queueSending ||
       runLoading ||
@@ -2463,7 +2513,7 @@
       settingsBusy ||
       restoring}
     onproject={() => {
-      if (!restoring) projectMenu = !projectMenu;
+      if (!restoring && !explorer.busy) projectMenu = !projectMenu;
     }}
     onnavigate={(tab) => run(() => navigate(tab))}
     onlauncher={() => (launcher = 'All')}
@@ -2479,7 +2529,7 @@
       busyHere={projectLocked}
       elsewhere={elsewhereProjects}
       blocked={!projectLocked &&
-      (busy || restoring || runLoading || settingsBusy)
+      (busy || restoring || runLoading || settingsBusy || explorer.busy)
         ? 'Wait for the current operation to finish.'
         : ''}
       onselect={(path, newWindow) => {
@@ -2515,6 +2565,7 @@
   >
     {#if leftOpen && !focusMode && view !== 'Changes' && view !== 'Runs' && view !== 'Settings'}<ExplorerPane
         {project}
+        blocked={restoring}
         {treeVersion}
         bind:showHidden
         changed={changedFiles.map((file) => file.path)}
@@ -2537,7 +2588,7 @@
         onopen={open}
         ondiscover={discover}
         onmenu={(entry, x, y, trigger) => (treeMenu = { entry, x, y, trigger })}
-        onaction={(entry, action) => run(() => treeAction(entry, action))}
+        onaction={(entry, action) => run(() => explorerAction(entry, action))}
         oncommit={(name) => run(() => commitName(name))}
       />
       <PaneDivider
@@ -3311,8 +3362,9 @@
     onclose={() => (treeMenu = null)}
     onaction={(action) => {
       const entry = treeMenu?.entry ?? null;
+      const trigger = treeMenu?.trigger;
       treeMenu = null;
-      run(() => treeAction(entry, action));
+      run(() => explorerAction(entry, action, trigger));
     }}
   />{/if}
 <Toasts

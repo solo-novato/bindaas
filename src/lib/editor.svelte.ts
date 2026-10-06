@@ -1,6 +1,7 @@
 import { api } from './api';
 import { editorText, diskText } from './text';
 import { ask } from './dialog.svelte';
+import { within } from './explorer.svelte';
 import type { FileData, Tab } from './types';
 export const editor = $state<{
   tabs: Tab[];
@@ -14,17 +15,144 @@ let opening = 0;
 let openingTab: Tab | undefined;
 const revisions = new WeakMap<Tab, number>();
 const closing = new WeakSet<Tab>();
+const reservations = new Map<object, string[]>();
+const reservedTabs = new WeakMap<Tab, object>();
 const live = (tab: Tab, path: string) =>
   tab.path === path && editor.tabs.includes(tab);
-const busy = (tab: Tab) => tab.saving || tab.reloading;
+const busy = (tab: Tab) => tab.saving || tab.reloading || tab.fileOperation;
+const reservedPath = (path: string) =>
+  [...reservations.values()].flat().some((root) => within(path, root));
 /** Call only after the caller has protected the current project's dirty buffers. */
 export function resetEditor() {
+  for (const tab of editor.tabs) {
+    reservedTabs.delete(tab);
+    tab.fileOperation = undefined;
+  }
+  reservations.clear();
   opening++;
   openingTab = undefined;
   editor.tabs = [];
   editor.active = '';
   editor.loading = false;
   editor.error = '';
+}
+
+/** Check before showing an action, then recheck when its reservation is taken. */
+export function assertFileOperationAvailable(path: string, destination = path) {
+  if (
+    [...reservations.values()]
+      .flat()
+      .some((root) =>
+        [path, destination].some(
+          (target) => within(target, root) || within(root, target),
+        ),
+      )
+  )
+    throw new Error('Wait for the current file operation to finish.');
+  const collision = editor.tabs.find(
+    (tab) => within(tab.path, destination) && !within(tab.path, path),
+  );
+  if (collision)
+    throw new Error(
+      `Close the existing tab for ${collision.path} before renaming.`,
+    );
+  const tabs = editor.tabs.filter((tab) => within(tab.path, path));
+  for (const tab of tabs) {
+    if (tab.dirty)
+      throw new Error(`Save or discard your edits to ${tab.path} first.`);
+    if (busy(tab) || closing.has(tab) || openingTab === tab)
+      throw new Error(
+        `Wait for the current operation on ${tab.path} to finish.`,
+      );
+  }
+}
+
+/** Reserve the complete subtree before issuing a rename or Trash command. */
+export function reserveFileOperation(
+  path: string,
+  kind: 'rename' | 'trash',
+  destination = path,
+) {
+  assertFileOperationAvailable(path, destination);
+  const tabs = editor.tabs.filter((tab) => within(tab.path, path));
+  const token = {};
+  const captured = tabs.map((tab) => ({ tab, scope: snapshot(tab) }));
+  reservations.set(token, [path, destination]);
+  for (const tab of tabs) {
+    reservedTabs.set(tab, token);
+    tab.fileOperation = kind;
+  }
+  const owned = () => reservations.has(token);
+  function cannotReconcile(reason: string): never {
+    const message = `${reason} Your open files are preserved; refresh the folder before continuing.`;
+    for (const { tab, scope } of captured) {
+      if (!scope.live() || reservedTabs.get(tab) !== token) continue;
+      tab.conflict = message;
+      // Native rename already returned: the old path may no longer exist.
+      // Retain available text even when it was clean before the operation.
+      if (tab.content !== undefined) tab.dirty = true;
+    }
+    throw new Error(message);
+  }
+  return {
+    rename(next: string) {
+      if (!owned()) return;
+      if (next !== destination)
+        cannotReconcile('Rename returned an unexpected destination.');
+      const sourceTabs = new Set(
+        captured
+          .filter(
+            ({ tab, scope }) => scope.live() && reservedTabs.get(tab) === token,
+          )
+          .map(({ tab }) => tab),
+      );
+      if (
+        editor.tabs.some(
+          (tab) => !sourceTabs.has(tab) && within(tab.path, next),
+        )
+      )
+        cannotReconcile(
+          'The rename destination is already open in another tab.',
+        );
+      // Validate the complete result before relabeling any tab in the subtree.
+      for (const { tab, scope } of captured) {
+        if (!scope.live() || reservedTabs.get(tab) !== token) continue;
+        if (!scope.unchanged()) tab.dirty = true;
+        const renamed = next + scope.path.slice(path.length);
+        if (editor.active === scope.path) editor.active = renamed;
+        tab.path = renamed;
+        if (tab.data) tab.data = { ...tab.data, path: renamed };
+      }
+    },
+    trash() {
+      if (!owned()) return;
+      const removed = new Set<Tab>();
+      for (const { tab, scope } of captured) {
+        if (!scope.live() || reservedTabs.get(tab) !== token) continue;
+        // Public edit paths are blocked, but preserve any unexpected new buffer.
+        if (tab.dirty || !scope.unchanged()) {
+          tab.dirty = true;
+          tab.conflict =
+            'File moved to the Trash. Your unsaved text is preserved.';
+        } else removed.add(tab);
+      }
+      const active = currentTab();
+      editor.tabs = editor.tabs.filter((tab) => !removed.has(tab));
+      if (active && removed.has(active)) {
+        editor.active = '';
+        return editor.tabs.at(-1);
+      }
+    },
+    release() {
+      reservations.delete(token);
+      for (const { tab } of captured) {
+        if (reservedTabs.get(tab) !== token) continue;
+        reservedTabs.delete(tab);
+        tab.fileOperation = undefined;
+        if (live(tab, tab.path) && !busy(tab)) releaseCleanInactive(tab);
+      }
+    },
+  };
 }
 function snapshot(tab: Tab) {
   const path = tab.path,
@@ -69,6 +197,7 @@ function report(tab: Tab, scope: ReturnType<typeof snapshot>, error: unknown) {
   if (scope.visible()) editor.error = String(error);
 }
 export async function openFile(path: string) {
+  if (reservedPath(path)) return;
   const ticket = ++opening;
   editor.loading = true;
   editor.error = '';
@@ -118,7 +247,7 @@ export async function openFile(path: string) {
 }
 export function editContent(content: string) {
   const tab = currentTab();
-  if (tab) {
+  if (tab && !tab.fileOperation) {
     if (tab.content !== content)
       revisions.set(tab, (revisions.get(tab) ?? 0) + 1);
     tab.content = content;

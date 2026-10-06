@@ -20,12 +20,17 @@
   const tab = $derived(currentTab());
   let workspace: HTMLDivElement;
   let comparisonFor = $state<Tab | null>(null);
+  let comparisonPath = $state('');
   const loadConflictReview = () => import('./FileConflictReview.svelte');
   let conflictComponent = $state<ReturnType<typeof loadConflictReview> | null>(
     null,
   );
   $effect(() => {
-    if (comparisonFor && comparisonFor !== tab) comparisonFor = null;
+    if (
+      comparisonFor &&
+      (comparisonFor !== tab || comparisonPath !== tab?.path)
+    )
+      comparisonFor = null;
   });
   const loadEditor = () => import('./CodeEditor.svelte');
   let editorComponent = $state<ReturnType<typeof loadEditor> | null>(null);
@@ -50,7 +55,8 @@
       markdownComponent = loadMarkdown();
   });
   async function startEdit() {
-    if (!tab) return;
+    const target = tab;
+    if (!target || target.fileOperation) return;
     if (
       tab.data?.readOnlyRecommended &&
       (await ask(
@@ -60,8 +66,9 @@
       )) !== 'Edit'
     )
       return;
-    tab.editing = true;
-    tab.mode = 'edit';
+    if (tab !== target || target.fileOperation) return;
+    target.editing = true;
+    target.mode = 'edit';
   }
   async function closeComparison() {
     const previous = comparisonFor;
@@ -81,8 +88,9 @@
     target?.focus({ preventScroll: true });
   }
   function compareDisk() {
-    if (!tab) return;
+    if (!tab || tab.fileOperation) return;
     comparisonFor = tab;
+    comparisonPath = tab.path;
     conflictComponent ??= loadConflictReview();
   }
 </script>
@@ -94,7 +102,10 @@
       >
         <button onclick={() => openFile(t.path)} title={t.path}
           >{t.path.split('/').at(-1)}{t.dirty ? ' ●' : ''}</button
-        ><button aria-label={`Close ${t.path}`} onclick={() => closeTab(t.path)}
+        ><button
+          aria-label={`Close ${t.path}`}
+          disabled={!!t.fileOperation}
+          onclick={() => closeTab(t.path)}
           ><Icon name="close" size={13} /></button
         >
       </div>{/each}
@@ -126,9 +137,14 @@
         </div>{/if}
       {#if tab.data.encoding === 'utf8'}{#if tab.editing}<button
             class="primary"
-            disabled={!tab.dirty || tab.saving || tab.reloading}
+            disabled={!tab.dirty ||
+              tab.saving ||
+              tab.reloading ||
+              !!tab.fileOperation}
             onclick={() => saveTab()}>Save <kbd>⌘S</kbd></button
-          >{:else}<button onclick={startEdit}>Edit</button>{/if}{/if}
+          >{:else}<button disabled={!!tab.fileOperation} onclick={startEdit}
+            >Edit</button
+          >{/if}{/if}
       <button
         title="Show containing folder"
         aria-label="Show containing folder"
@@ -137,6 +153,11 @@
         ><Icon name="folder-open" size={16} /></button
       >
     </div>
+    {#if tab.fileOperation}<div class="banner" role="status">
+        {tab.fileOperation === 'rename'
+          ? 'Renaming this file…'
+          : 'Moving this file to Trash…'} Editing is paused until the action finishes.
+      </div>{/if}
     {#if tab.editing && activeTask}<div class="banner">
         An agent is working and may modify this file. Unsaved edits stay in your
         buffer.
@@ -145,10 +166,10 @@
         class="banner warning file-conflict-banner"
       >
         <span>{tab.conflict}</span><button
-          disabled={tab.saving || tab.reloading}
+          disabled={tab.saving || tab.reloading || !!tab.fileOperation}
           onclick={compareDisk}>Compare</button
         ><button
-          disabled={tab.saving || tab.reloading}
+          disabled={tab.saving || tab.reloading || !!tab.fileOperation}
           onclick={() => reloadTab(tab)}>Reload disk</button
         >
       </div>{/if}

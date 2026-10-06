@@ -41,9 +41,12 @@
   let error = $state('');
   let mounted = $state(false);
   const editable = new Compartment(),
-    grammar = new Compartment();
+    grammar = new Compartment(),
+    access = new Compartment(),
+    fileIdentity = new Compartment();
   let current = '';
   let previousEditing = false;
+  let previousReserved = false;
   let previousTab: Tab | undefined;
   let request = 0;
   const theme = EditorView.theme(
@@ -68,8 +71,6 @@
   );
   function mode(editing: boolean) {
     return [
-      EditorState.readOnly.of(!editing),
-      EditorView.editable.of(editing),
       ...(editing
         ? [
             history(),
@@ -87,6 +88,17 @@
         : []),
     ];
   }
+  function editAccess(editing: boolean, reserved: boolean) {
+    return [
+      EditorState.readOnly.of(!editing || reserved),
+      EditorView.editable.of(editing && !reserved),
+    ];
+  }
+  function identity(path: string) {
+    return EditorView.contentAttributes.of({
+      'aria-label': `File contents: ${path}`,
+    });
+  }
   onMount(() => {
     view = new EditorView({
       parent: host,
@@ -100,6 +112,8 @@
           theme,
           editable.of([]),
           grammar.of([]),
+          access.of([]),
+          fileIdentity.of([]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onchange(update.state.doc.toString());
             if (update.selectionSet) {
@@ -129,26 +143,27 @@
   $effect(() => {
     const path = tab.path,
       text = tab.content ?? '',
-      editing = tab.editing;
+      editing = tab.editing,
+      reserved = !!tab.fileOperation;
     const ready = mounted;
     if (!ready || !view) return;
-    if (current !== path) {
+    const changedTab = previousTab !== tab;
+    if (changedTab) {
       if (previousTab && view) previousTab.scroll = view.scrollDOM.scrollTop;
       previousTab = tab;
       previousEditing = editing;
-      current = path;
+      previousReserved = reserved;
       selected = null;
       const extensions = [
         lineNumbers(),
-        EditorView.contentAttributes.of({
-          'aria-label': `File contents: ${path}`,
-        }),
+        fileIdentity.of(identity(path)),
         drawSelection(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle),
         keymap.of(searchKeymap),
         theme,
         editable.of(mode(editing)),
+        access.of(editAccess(editing, reserved)),
         grammar.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onchange(update.state.doc.toString());
@@ -173,14 +188,13 @@
         }),
       );
       view.scrollDOM.scrollTop = tab.scroll;
-      const ticket = ++request;
-      language(path)
-        .then((lang) => {
-          if (ticket === request && view)
-            view.dispatch({ effects: grammar.reconfigure(lang) });
-        })
-        .catch((e) => (error = String(e)));
     } else {
+      if (previousEditing !== editing || previousReserved !== reserved) {
+        previousReserved = reserved;
+        view.dispatch({
+          effects: access.reconfigure(editAccess(editing, reserved)),
+        });
+      }
       if (previousEditing !== editing) {
         previousEditing = editing;
         view.dispatch({ effects: editable.reconfigure(mode(editing)) });
@@ -190,6 +204,20 @@
           changes: { from: 0, to: view.state.doc.length, insert: text },
         });
     }
+    if (changedTab || current !== path) {
+      current = path;
+      error = '';
+      view.dispatch({ effects: fileIdentity.reconfigure(identity(path)) });
+      const ticket = ++request;
+      language(path)
+        .then((lang) => {
+          if (ticket === request && view)
+            view.dispatch({ effects: grammar.reconfigure(lang) });
+        })
+        .catch((cause) => {
+          if (ticket === request) error = String(cause);
+        });
+    }
   });
 </script>
 
@@ -197,6 +225,7 @@
 <div class="code-host" bind:this={host}></div>
 {#if selected}<button
     class="selection-action"
+    disabled={!!tab.fileOperation}
     onclick={() =>
       oncontext({
         id: crypto.randomUUID(),

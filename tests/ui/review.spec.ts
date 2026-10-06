@@ -468,9 +468,24 @@ test('explorer creates files and folders inline, never overwrites, and opens new
       .map((c: any) => c.args),
   );
   expect(created).toEqual([
-    { parent: '', name: 'notes.md', directory: false },
-    { parent: 'src', name: 'main.ts', directory: false },
-    { parent: 'src', name: 'components/ui', directory: true },
+    {
+      parent: '',
+      name: 'notes.md',
+      directory: false,
+      expectedProjectRoot: '/fixture/project',
+    },
+    {
+      parent: 'src',
+      name: 'main.ts',
+      directory: false,
+      expectedProjectRoot: '/fixture/project',
+    },
+    {
+      parent: 'src',
+      name: 'components/ui',
+      directory: true,
+      expectedProjectRoot: '/fixture/project',
+    },
   ]);
 });
 

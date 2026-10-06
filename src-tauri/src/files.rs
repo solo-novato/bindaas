@@ -284,6 +284,9 @@ pub fn create(root: &Path, parent: &str, name: &str, directory: bool) -> Result<
     if !current.is_dir() {
         return Err("Choose a folder to create in".into());
     }
+    // Explorer identities retain the requested symlink spelling; only the I/O
+    // path is canonicalized for containment checks.
+    let relative_target = project_relative(root, &root.join(parent).join(parts.join("/")))?;
     let (last, folders) = parts.split_last().ok_or("Enter a name")?;
     for part in folders {
         let next = current.join(part);
@@ -311,7 +314,7 @@ pub fn create(root: &Path, parent: &str, name: &str, directory: bool) -> Result<
         std::io::ErrorKind::AlreadyExists => already_exists(last),
         _ => e.to_string(),
     })?;
-    project_relative(root, &target)
+    Ok(relative_target)
 }
 
 /// Renames within the same folder. Refuses to replace an existing entry.
@@ -322,14 +325,20 @@ pub fn rename(root: &Path, relative: &str, new_name: &str) -> Result<String, Str
     }
     let source = located(root, relative)?;
     let target = source.with_file_name(parts[0]);
+    let relative_target = project_relative(
+        root,
+        &root
+            .join(relative.trim_end_matches('/'))
+            .with_file_name(parts[0]),
+    )?;
     if target == source {
-        return project_relative(root, &target);
+        return Ok(relative_target);
     }
     rename_exclusive(&source, &target).map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => already_exists(parts[0]),
         _ => e.to_string(),
     })?;
-    project_relative(root, &target)
+    Ok(relative_target)
 }
 
 #[cfg(target_os = "macos")]
@@ -581,6 +590,30 @@ mod tests {
         assert!(!outside.path().join("x.txt").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn create_preserves_in_project_symlink_paths() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        fs::create_dir(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        assert_eq!(create(&root, "alias", "a.txt", false).unwrap(), "alias/a.txt");
+        assert_eq!(
+            create(&root, "", "alias/nested/b.txt", false).unwrap(),
+            "alias/nested/b.txt"
+        );
+        assert_eq!(
+            create(&root, "alias", "folder", true).unwrap(),
+            "alias/folder"
+        );
+        assert!(root.join("real/a.txt").is_file());
+        assert!(root.join("real/nested/b.txt").is_file());
+        assert!(root.join("real/folder").is_dir());
+        fs::write(root.join("real/a.txt"), "keep").unwrap();
+        assert!(create(&root, "alias", "a.txt", false).is_err());
+        assert_eq!(fs::read_to_string(root.join("real/a.txt")).unwrap(), "keep");
+    }
+
     #[test]
     fn rename_refuses_existing_targets_and_keeps_contents() {
         let d = tempfile::tempdir().unwrap();
@@ -597,6 +630,43 @@ mod tests {
         assert!(rename(&root, "c.txt", "sub/c.txt").is_err());
         assert!(rename(&root, "", "x").is_err());
         assert!(rename(&root, "missing.txt", "x").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_preserves_in_project_symlink_paths_and_file_contents() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        fs::create_dir(root.join("real")).unwrap();
+        fs::write(root.join("real/a.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        assert_eq!(rename(&root, "alias/a.txt", "a.txt").unwrap(), "alias/a.txt");
+        assert_eq!(fs::read_to_string(root.join("real/a.txt")).unwrap(), "keep");
+        assert_eq!(rename(&root, "alias/a.txt", "b.txt").unwrap(), "alias/b.txt");
+        assert!(!root.join("real/a.txt").exists());
+        assert_eq!(fs::read_to_string(root.join("real/b.txt")).unwrap(), "keep");
+        let listed = list(&root, "alias", false).unwrap();
+        assert_eq!(listed.entries[0].path, "alias/b.txt");
+        assert_eq!(read(&root, "alias/b.txt").unwrap().path, "alias/b.txt");
+        fs::write(root.join("real/c.txt"), "existing").unwrap();
+        assert!(rename(&root, "alias/b.txt", "c.txt").is_err());
+        assert_eq!(fs::read_to_string(root.join("real/c.txt")).unwrap(), "existing");
+        assert_eq!(fs::read_to_string(root.join("real/b.txt")).unwrap(), "keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_refuses_symlinked_folders_outside_the_project() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        fs::write(outside.path().join("a.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+        for name in ["a.txt", "b.txt"] {
+            assert!(rename(&root, "escape/a.txt", name).is_err());
+        }
+        assert_eq!(fs::read_to_string(outside.path().join("a.txt")).unwrap(), "keep");
+        assert!(!outside.path().join("b.txt").exists());
     }
 
     #[test]
