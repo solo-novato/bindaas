@@ -597,7 +597,10 @@ mod tests {
         let root = d.path().canonicalize().unwrap();
         fs::create_dir(root.join("real")).unwrap();
         std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-        assert_eq!(create(&root, "alias", "a.txt", false).unwrap(), "alias/a.txt");
+        assert_eq!(
+            create(&root, "alias", "a.txt", false).unwrap(),
+            "alias/a.txt"
+        );
         assert_eq!(
             create(&root, "", "alias/nested/b.txt", false).unwrap(),
             "alias/nested/b.txt"
@@ -640,9 +643,15 @@ mod tests {
         fs::create_dir(root.join("real")).unwrap();
         fs::write(root.join("real/a.txt"), "keep").unwrap();
         std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
-        assert_eq!(rename(&root, "alias/a.txt", "a.txt").unwrap(), "alias/a.txt");
+        assert_eq!(
+            rename(&root, "alias/a.txt", "a.txt").unwrap(),
+            "alias/a.txt"
+        );
         assert_eq!(fs::read_to_string(root.join("real/a.txt")).unwrap(), "keep");
-        assert_eq!(rename(&root, "alias/a.txt", "b.txt").unwrap(), "alias/b.txt");
+        assert_eq!(
+            rename(&root, "alias/a.txt", "b.txt").unwrap(),
+            "alias/b.txt"
+        );
         assert!(!root.join("real/a.txt").exists());
         assert_eq!(fs::read_to_string(root.join("real/b.txt")).unwrap(), "keep");
         let listed = list(&root, "alias", false).unwrap();
@@ -650,7 +659,10 @@ mod tests {
         assert_eq!(read(&root, "alias/b.txt").unwrap().path, "alias/b.txt");
         fs::write(root.join("real/c.txt"), "existing").unwrap();
         assert!(rename(&root, "alias/b.txt", "c.txt").is_err());
-        assert_eq!(fs::read_to_string(root.join("real/c.txt")).unwrap(), "existing");
+        assert_eq!(
+            fs::read_to_string(root.join("real/c.txt")).unwrap(),
+            "existing"
+        );
         assert_eq!(fs::read_to_string(root.join("real/b.txt")).unwrap(), "keep");
     }
 
@@ -665,7 +677,10 @@ mod tests {
         for name in ["a.txt", "b.txt"] {
             assert!(rename(&root, "escape/a.txt", name).is_err());
         }
-        assert_eq!(fs::read_to_string(outside.path().join("a.txt")).unwrap(), "keep");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("a.txt")).unwrap(),
+            "keep"
+        );
         assert!(!outside.path().join("b.txt").exists());
     }
 

@@ -1390,7 +1390,10 @@ mod tests {
             }
             windows.set_project("main", Some(replacement.clone()));
             drop(project_change);
-            assert!(pending.await.unwrap_err().contains("active project changed"));
+            assert!(pending
+                .await
+                .unwrap_err()
+                .contains("active project changed"));
             assert_unchanged(&original, "original project");
             assert_unchanged(&replacement, "replacement project");
         }
