@@ -43,11 +43,15 @@ export class ProjectSearch {
     this.cancel();
     const sequence = this.#sequence;
     const text = query.trim();
-    if (!this.enabled() || !text) return;
+    if (!text) return;
+    if (!this.enabled()) {
+      onresult(null);
+      return;
+    }
     this.#timer = setTimeout(async () => {
       try {
         const files = await this.search(text);
-        if (sequence === this.#sequence) onresult(files ?? []);
+        if (sequence === this.#sequence) onresult(files);
       } catch {
         if (sequence === this.#sequence) onresult(null);
       }

@@ -2,8 +2,8 @@
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    fs::File,
     io::{Read, Seek, SeekFrom},
+    path::Path,
 };
 
 const TAIL_CAP: u64 = 16 * 1024 * 1024;
@@ -21,15 +21,24 @@ fn mode(value: &Value) -> Value {
     }
 }
 pub fn live(s: &Value) -> Value {
-    json!({"model":s["model"],"effort":s["effort"],
+    let mut settings = json!({"model":s["model"],"effort":s["effort"],
         "mode":mode(&s["collaborationMode"]["mode"]),"sandbox":s["sandboxPolicy"],
         "approvalPolicy":s["approvalPolicy"],"approvalsReviewer":s["approvalsReviewer"],
-        "permissionProfile":s["activePermissionProfile"],"cwd":s["cwd"],"modelProvider":s["modelProvider"],"serviceTier":s["serviceTier"]})
+        "permissionProfile":s["activePermissionProfile"],"cwd":s["cwd"],"modelProvider":s["modelProvider"]});
+    // An omitted tier is unknown; an explicit null confirms the standard tier.
+    if let Some(tier) = s.get("serviceTier") {
+        settings["serviceTier"] = tier.clone();
+    }
+    settings
 }
 pub fn resumed(s: &Value) -> Value {
-    json!({"model":s["model"],"effort":s["reasoningEffort"],"mode":null,
+    let mut settings = json!({"model":s["model"],"effort":s["reasoningEffort"],"mode":null,
         "sandbox":s["sandbox"],"approvalPolicy":s["approvalPolicy"],
-        "approvalsReviewer":s["approvalsReviewer"],"permissionProfile":s["activePermissionProfile"],"cwd":s["cwd"],"modelProvider":s["modelProvider"],"serviceTier":s["serviceTier"]})
+        "approvalsReviewer":s["approvalsReviewer"],"permissionProfile":s["activePermissionProfile"],"cwd":s["cwd"],"modelProvider":s["modelProvider"]});
+    if let Some(tier) = s.get("serviceTier") {
+        settings["serviceTier"] = tier.clone();
+    }
+    settings
 }
 fn context(s: &Value) -> Value {
     json!({"model":s["model"],"effort":s["effort"],
@@ -48,10 +57,7 @@ fn applied(s: &Value) -> Value {
 pub fn read(thread: &Value) -> Recorded {
     fn inner(thread: &Value) -> Option<Recorded> {
         let id = thread["id"].as_str()?;
-        let mut file = File::open(thread["path"].as_str()?).ok()?;
-        if !file.metadata().ok()?.is_file() {
-            return None;
-        }
+        let mut file = crate::files::open_regular(Path::new(thread["path"].as_str()?)).ok()?;
         let mut head = vec![0; 64 * 1024];
         let n = file.read(&mut head).ok()?;
         let end = head[..n].iter().position(|b| *b == b'\n')?;

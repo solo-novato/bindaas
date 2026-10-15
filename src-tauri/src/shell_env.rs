@@ -130,6 +130,22 @@ pub fn search_path() -> OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
+/// Match the environment handed to agent processes, including Finder launches.
+pub fn inherited_var(key: &str) -> Option<OsString> {
+    std::env::var_os(key).or_else(|| {
+        (!ignored(key))
+            .then(|| shell_env().get(key).map(OsString::from))
+            .flatten()
+    })
+}
+
+/// Match the home inherited by the Codex process, including Finder launches.
+pub fn codex_home() -> PathBuf {
+    inherited_var("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(inherited_var("HOME").unwrap_or_default()).join(".codex"))
+}
+
 /// Finds an executable by name on [`search_path`].
 pub fn find(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&search_path())
@@ -181,5 +197,20 @@ mod tests {
         assert!(dirs.contains(&PathBuf::from("/usr/bin")));
         let unique: std::collections::HashSet<_> = dirs.iter().collect();
         assert_eq!(unique.len(), dirs.len());
+    }
+
+    #[test]
+    fn history_homes_match_the_environment_passed_to_agents() {
+        let mut command = tokio::process::Command::new("unused");
+        apply(&mut command);
+        for key in ["HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+            let inherited = command
+                .as_std()
+                .get_envs()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.map(OsString::from))
+                .unwrap_or_else(|| std::env::var_os(key));
+            assert_eq!(inherited_var(key), inherited, "{key}");
+        }
     }
 }

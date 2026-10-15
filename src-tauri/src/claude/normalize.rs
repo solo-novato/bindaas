@@ -39,6 +39,21 @@ impl Normalizer {
                         _ => "tool",
                     };
                     let mut item = json!({"id":tool_id,"threadId":thread,"turnId":turn,"kind":kind,"title":name,"status":"inProgress","detail":prefix(&input.to_string(),20*1024),"parentToolId":frame["parent_tool_use_id"]});
+                    // Keep small, structured navigation metadata for live and historical trails.
+                    // Never copy arbitrary tool arguments into this metadata.
+                    let mut navigation = serde_json::Map::new();
+                    for (target, source) in [
+                        ("path", "file_path"),
+                        ("query", "pattern"),
+                        ("description", "description"),
+                    ] {
+                        if let Some(value) = input[source].as_str() {
+                            navigation.insert(target.into(), json!(prefix(value, 1000)));
+                        }
+                    }
+                    if !navigation.is_empty() {
+                        item["toolInput"] = Value::Object(navigation);
+                    }
                     if kind == "command" {
                         item["command"] = input["command"].clone();
                     }
@@ -102,6 +117,21 @@ pub fn settings(model: Option<&str>, permission: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_metadata_is_bounded_and_keeps_parent_identity() {
+        let mut n = Normalizer::default();
+        let v = n.message(&json!({"type":"assistant","parent_tool_use_id":"parent","message":{"content":[{"type":"tool_use","id":"read-1","name":"Read","input":{"file_path":"/project/auth.ts","description":"x".repeat(2000),"unrelated_secret":"not-for-navigation"}}]}}), "claude:a", "r");
+        assert_eq!(v[0]["parentToolId"], "parent");
+        assert_eq!(v[0]["toolInput"]["path"], "/project/auth.ts");
+        assert_eq!(
+            v[0]["toolInput"]["description"].as_str().unwrap().len(),
+            1000
+        );
+        assert!(v[0]["toolInput"].get("unrelated_secret").is_none());
+        let completed = n.message(&json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"read-1","content":"source text"}]}}), "claude:a", "r");
+        assert_eq!(completed[0]["toolInput"]["path"], "/project/auth.ts");
+        assert_eq!(completed[0]["parentToolId"], "parent");
+    }
     #[test]
     fn tools_are_observable_without_fabricated_exit_codes_or_thinking() {
         let mut n = Normalizer::default();

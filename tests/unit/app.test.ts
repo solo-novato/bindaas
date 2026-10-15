@@ -25,6 +25,26 @@ describe('@ mentions', () => {
 });
 
 describe('project search', () => {
+  it('settles immediately when no project is open and preserves unavailable results', async () => {
+    const search = vi.fn(async () => null);
+    const results: unknown[] = [];
+    new ProjectSearch(search, () => false).run('file', (files) =>
+      results.push(files),
+    );
+    expect(results).toEqual([null]);
+    expect(search).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      new ProjectSearch(search, () => true).run('file', (files) =>
+        results.push(files),
+      );
+      await vi.runAllTimersAsync();
+      expect(results).toEqual([null, null]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('debounces, reports only the newest query, and signals unavailability', async () => {
     vi.useFakeTimers();
     const search = vi.fn(async (query: string) =>

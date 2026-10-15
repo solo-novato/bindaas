@@ -21,7 +21,15 @@ test('session status shows Codex settings, usage, account limits and live token 
     .click();
   const panel = page.getByRole('dialog', { name: 'Session controls' });
   await expect(panel.getByText('12,500', { exact: true })).toBeVisible();
-  await expect(panel.getByText('75% remaining', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Average per day so far')).toBeVisible();
+  await expect(
+    panel.getByRole('meter', { name: '5-hour limit remaining' }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('region', { name: 'Account usage remaining' })
+      .getByText('75% remaining', { exact: true }),
+  ).toBeVisible();
   await expect(
     panel.getByText('fixture@example.test · pro', { exact: true }),
   ).toBeVisible();

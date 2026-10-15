@@ -152,3 +152,76 @@ async fn standard_clears_tier_and_project_and_target_validation_precede_writes()
     assert_eq!(results[0]["settings"]["serviceTier"], "default");
     c.stop().await;
 }
+
+#[tokio::test]
+async fn no_op_updates_use_reported_start_settings_without_a_notification() {
+    let root = tempfile::tempdir().unwrap();
+    let c = client().await;
+    for (initial, fast) in [(json!("priority"), true), (Value::Null, false)] {
+        let response = c
+            .request(
+                "thread/start",
+                json!({"cwd":root.path(),"initialTier":initial,"noNotification":true}),
+            )
+            .await
+            .unwrap();
+        let id = response["thread"]["id"].as_str().unwrap().to_owned();
+        c.resumed.lock().await.insert(id.clone(), response);
+        let result = apply(
+            c.clone(),
+            root.path(),
+            vec![Target {
+                thread_id: id,
+                turn_id: None,
+            }],
+            fast,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result[0]["future"], "saved");
+        assert_eq!(result[0]["active"], "notTargeted");
+        assert_eq!(result[0]["settings"]["serviceTier"], initial);
+    }
+    c.stop().await;
+}
+
+#[tokio::test]
+async fn accepted_updates_need_matching_reported_settings_before_claiming_success() {
+    let root = tempfile::tempdir().unwrap();
+    let c = client().await;
+    for (options, fast) in [
+        (json!({"noNotification":true}), true),
+        (json!({"noNotification":true,"omitTier":true}), false),
+        (
+            json!({"omitNotificationTier":true,"initialTier":"priority"}),
+            false,
+        ),
+        (
+            json!({"reportWrongTier":true,"initialTier":"priority"}),
+            true,
+        ),
+    ] {
+        let mut params = options;
+        params["cwd"] = json!(root.path());
+        let response = c.request("thread/start", params).await.unwrap();
+        let id = response["thread"]["id"].as_str().unwrap().to_owned();
+        c.resumed.lock().await.insert(id.clone(), response);
+        let result = apply(
+            c.clone(),
+            root.path(),
+            vec![Target {
+                thread_id: id,
+                turn_id: None,
+            }],
+            fast,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result[0]["future"], "failed");
+        assert!(result[0]["futureError"]
+            .as_str()
+            .unwrap()
+            .contains("did not confirm"));
+    }
+    c.stop().await;
+}

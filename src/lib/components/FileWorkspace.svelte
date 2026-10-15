@@ -17,7 +17,10 @@
     oncontext,
   }: { activeTask: boolean; oncontext: (context: Context) => void } = $props();
   const tab = $derived(currentTab());
-  let compare = $state<string | null>(null);
+  let comparison = $state<{ path: string; content: string } | null>(null);
+  const compare = $derived(
+    comparison?.path === tab?.path ? comparison?.content : null,
+  );
   const loadEditor = () => import('./CodeEditor.svelte');
   let editorComponent = $state<ReturnType<typeof loadEditor> | null>(null);
   $effect(() => {
@@ -41,9 +44,10 @@
       markdownComponent = loadMarkdown();
   });
   async function startEdit() {
-    if (!tab) return;
+    const target = tab;
+    if (!target) return;
     if (
-      tab.data?.readOnlyRecommended &&
+      target.data?.readOnlyRecommended &&
       (await ask(
         'Large text file',
         'Editing a file over 1 MiB may use more memory. Continue?',
@@ -51,13 +55,20 @@
       )) !== 'Edit'
     )
       return;
-    tab.editing = true;
-    tab.mode = 'edit';
+    if (!editor.tabs.includes(target)) return;
+    target.editing = true;
+    target.mode = 'edit';
   }
   async function compareDisk() {
-    if (tab) {
+    const target = tab;
+    if (target) {
       try {
-        compare = (await api.read(tab.path)).content ?? 'Preview unavailable';
+        const data = await api.read(target.path);
+        if (tab === target)
+          comparison = {
+            path: target.path,
+            content: data.content ?? 'Preview unavailable',
+          };
       } catch (e) {
         editor.error = String(e);
       }
@@ -77,7 +88,7 @@
         >
       </div>{/each}
   </div>
-  {#if editor.error}<div class="banner error">
+  {#if editor.error}<div class="banner error" role="alert">
       {editor.error}<button
         onclick={() => (editor.error = '')}
         aria-label="Dismiss file error"><Icon name="close" size={14} /></button
@@ -116,16 +127,16 @@
       >
     </div>
     {#if tab.editing && activeTask}<div class="banner">
-        Codex is working and may modify this file. Unsaved edits stay in your
+        An agent is working and may modify this file. Unsaved edits stay in your
         buffer.
       </div>{/if}
     {#if tab.conflict}<div class="banner warning">
         <span>{tab.conflict}</span><button onclick={compareDisk}>Compare</button
         ><button onclick={() => reloadTab()}>Reload disk</button><button
-          onclick={() => (compare = null)}>Keep mine</button
+          onclick={() => (comparison = null)}>Keep mine</button
         >
       </div>{/if}
-    {#if compare !== null}<div class="compare">
+    {#if compare != null}<div class="compare">
         <div>
           <h4>Your unsaved content</h4>
           <pre>{tab.content?.slice(0, 100000)}</pre>
@@ -134,7 +145,7 @@
           <h4>Current disk content</h4>
           <pre>{compare.slice(0, 100000)}</pre>
         </div>
-        <button onclick={() => (compare = null)}>Close comparison</button>
+        <button onclick={() => (comparison = null)}>Close comparison</button>
       </div>
     {:else if tab.data.encoding !== 'utf8'}<div class="empty">
         <h2>

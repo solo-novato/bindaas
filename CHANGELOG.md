@@ -4,6 +4,36 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
+### Added
+
+- An evidence-backed Agent Trail beside the transcript: grouped exploration, visible failures and retries, agent-stated updates, exact source inspection, and on-demand saved-history paging for Codex and Claude. The trail keeps your reading position, supports keyboard navigation and compact panes, and makes incomplete or unknown activity explicit without extra model calls or polling.
+- Forecast remaining dates using independently learned weekday rates and weighted partial-day history, with a per-date calculation breakdown and explicit fallbacks.
+- Import existing Codex quota history across all projects in the active profile, with disclosed attribution for older sessions that predate account IDs, and show a provisional current-period forecast while historical patterns build, instead of requiring seven new days of observations.
+- Account usage analysis with daily pacing, a daily history table, and forecasts learned from all locally saved observations, including weekday and weekend patterns once enough history exists.
+- A separate bottom usage bar with a continuous green–amber–red gradient based on forecast headroom. Newly started or unavailable limits stay neutral; current limits update on activity and focus without polling.
+
+### Fixed
+
+- Preserve unsaved editor text when a reload fails or edits arrive during a pending save; ignore stale reads after closing tabs or switching projects.
+- Keep file comparison previews scoped to their file and clearly explain when project search is unavailable.
+- Treat compound command outcomes conservatively in Agent Trail, and retry the correct saved-history page after a failed refresh.
+- Mark disconnected or failed account-usage refreshes as stale until fresh data arrives, and keep limits with unknown reset timing visible.
+- Stop transcript activity animations when a turn ends without inventing completion; preserve literal filenames when opening trail evidence.
+- Refuse ambiguous legacy account attribution when history directories cannot be fully read.
+- Handle truncated Git status safely and reject non-regular files before reading project files, attachments, or agent history.
+- Resolve Claude history from the same login-shell configuration used to launch the agent.
+- Confirm Fast and Standard modes from authoritative Codex settings, including unchanged tiers that emit no notification, and report unconfirmed changes as failures.
+
+### Security
+
+- Update vulnerable transitive `devalue` and `source-map-js` dependencies.
+
+### Changed
+
+- Release builds now require the full CI suite and matching versions in all manifests and lockfiles before packaging.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
@@ -41,6 +71,7 @@ All notable changes to Bindaas are documented here. The format follows [Keep a C
 
 - "Open in default app" refuses apps, scripts, installers, link files, and executables.
 
-[Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/solo-novato/bindaas/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/solo-novato/bindaas/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/solo-novato/bindaas/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/solo-novato/bindaas/releases/tag/v0.1.0

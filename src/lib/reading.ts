@@ -6,6 +6,7 @@ export type ReadingPosition = {
   following: boolean;
 };
 export type ReadingView = ReadingPosition & {
+  presentation?: 'transcript' | 'trail';
   windowSize: number;
   expanded: string[];
   expandedGroups: string[];

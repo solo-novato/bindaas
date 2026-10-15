@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, untrack, tick } from 'svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { api } from '../api';
   import { agentName } from '../harness';
   import type { Harness } from '../types';
+  import UsageAnalysis from './UsageAnalysis.svelte';
+  import { accountUsage, refreshAccountUsage } from '../account-usage.svelte';
   import SpeedControls from './SpeedControls.svelte';
   import {
     accessDetails,
@@ -11,7 +13,6 @@
     policyLabel,
     policyOptions,
     tokenNumber,
-    windowLabel,
   } from '../session';
   import type {
     AccountStatus,
@@ -26,6 +27,7 @@
   let {
     harness = 'codex',
     initialTab,
+    focusUsage = false,
     running = false,
     threadId,
     root,
@@ -43,6 +45,7 @@
   }: {
     harness?: Harness;
     initialTab: 'status' | 'permissions';
+    focusUsage?: boolean;
     running?: boolean;
     threadId: string | null;
     root: string;
@@ -62,7 +65,10 @@
   let tab = $state<'status' | 'permissions'>(untrack(() => initialTab));
   let session = $state<SessionStatus | null>(null);
   let usage = $state<TokenUsage | null>(null);
-  let account = $state<AccountStatus | null>(null);
+  let otherAccount = $state<AccountStatus | null>(null);
+  const account = $derived(
+    harness === 'codex' ? accountUsage.value : otherAccount,
+  );
   let options = $state<PermissionOptions | null>(null);
   let sessionLoading = $state(false),
     accountLoading = $state(false),
@@ -82,6 +88,7 @@
     usageRevision = 0,
     settingsRevision = 0;
   let modal: HTMLDialogElement;
+  let usageSection = $state<HTMLElement>();
   let speedBusy = $state(false);
   const effective = $derived(settings ?? session?.settings ?? null);
   const access = $derived(accessDetails(effective));
@@ -110,6 +117,14 @@
     options?.profiles.find((p) => p.id === chosenProfile),
   );
   const connected = $derived(connection.type === 'ready');
+  const accountStale = $derived(
+    !connected ||
+      (account?.generation ?? 0) < (connection.generation ?? 0) ||
+      (harness === 'codex' ? accountUsage.stale : limitsStale),
+  );
+  const displayedAccountError = $derived(
+    harness === 'codex' ? accountUsage.error : accountError,
+  );
   const input = $derived(usage?.last?.inputTokens);
   const capacity = $derived(usage?.modelContextWindow);
   const percent = $derived(
@@ -146,13 +161,15 @@
     accountLoading = true;
     accountError = '';
     try {
+      if (harness === 'codex') {
+        await refreshAccountUsage();
+        accountError = accountUsage.error;
+        limitsStale = false;
+        return;
+      }
       const value = await api.accountStatus(harness);
-      if (
-        !disposed &&
-        (harness === 'claude' ||
-          value.generation >= (connection.generation ?? 0))
-      ) {
-        account = value;
+      if (!disposed) {
+        otherAccount = value;
         limitsStale = false;
       }
     } catch (e) {
@@ -254,6 +271,10 @@
         loadSession(),
         tab === 'status' ? loadAccount() : loadOptions(),
       ]);
+      if (!disposed && focusUsage) {
+        await tick();
+        usageSection?.scrollIntoView({ block: 'start' });
+      }
     })();
     return () => {
       disposed = true;
@@ -419,8 +440,8 @@
                 : `${agentLabel} has not reported token usage for this conversation.`}
             </p>{/if}
         </section>
-        <section>
-          <h3>Account & limits</h3>
+        <section bind:this={usageSection}>
+          <h3>Account & usage analysis</h3>
           {#if accountLoading}<p class="muted">
               Reading account limits…
             </p>{:else if account?.account}<p>
@@ -431,52 +452,29 @@
                 .filter(Boolean)
                 .join(' · ')}
             </p>{/if}
-          {#if accountError || account?.accountError || account?.limitsError}<p
+          {#if displayedAccountError || account?.accountError || account?.limitsError}<p
               class="muted"
             >
-              {accountError || account?.accountError || account?.limitsError}
+              {displayedAccountError ||
+                account?.accountError ||
+                account?.limitsError}
             </p>{/if}
           {#if account?.limits?.ordinaryUsageAllowed === false}<p
               class="banner warning"
             >
               Codex reports that included usage is currently unavailable.
             </p>{/if}
-          {#each account?.limits?.buckets ?? [] as bucket}<div
-              class="limit-bucket"
-            >
-              <strong
-                >{[bucket.name ?? bucket.id ?? 'Codex usage', bucket.plan]
-                  .filter(Boolean)
-                  .join(' · ')}</strong
-              >
-              {#each [bucket.primary, bucket.secondary].filter((w) => w !== null) as window}<div
-                  class="usage-heading"
-                >
-                  <span>{windowLabel(window.windowDurationMins)}</span><strong
-                    >{typeof window.usedPercent === 'number'
-                      ? `${Math.max(0, Math.min(100, 100 - window.usedPercent)).toFixed(0)}% remaining`
-                      : 'Not reported'}</strong
-                  >
-                </div>
-                {#if typeof window.usedPercent === 'number'}<meter
-                    min="0"
-                    max="100"
-                    value={Math.max(0, Math.min(100, 100 - window.usedPercent))}
-                    aria-label={`${windowLabel(window.windowDurationMins)} remaining`}
-                  ></meter>{/if}
-                {#if window.resetsAt}<p class="muted small">
-                    Resets {new Date(window.resetsAt * 1000).toLocaleString()}
-                  </p>{/if}
-              {/each}
-            </div>{/each}
-          {#if !accountLoading && !account?.limits?.buckets.length && !account?.limitsError && !accountError}<p
+          {#if harness === 'codex' && account?.limits?.buckets.length}<UsageAnalysis
+              {account}
+              stale={accountStale}
+            />{/if}
+          {#if !accountLoading && !account?.limits?.buckets.length && !account?.limitsError && !displayedAccountError}<p
               class="muted"
             >
               Account limits are not available.
             </p>{/if}
-          {#if limitsStale}<p class="muted small">
-              New usage information is available. Refresh status for current
-              limits.
+          {#if harness !== 'codex' && limitsStale}<p class="muted small">
+              Usage changed. Refresh status to update analysis.
             </p>{/if}
         </section>
         {#if threadId}<details>
@@ -694,7 +692,7 @@
     position: sticky;
     top: 0;
     z-index: 2;
-    background: var(--glass-surface, var(--raised));
+    background: var(--raised);
   }
   .panel-heading {
     display: flex;
@@ -732,6 +730,7 @@
     padding: 18px 20px 22px;
   }
   section {
+    scroll-margin-top: 130px;
     padding-bottom: 20px;
     margin-bottom: 20px;
     border-bottom: 1px solid var(--border);
@@ -791,12 +790,7 @@
   meter::-webkit-meter-optimum-value {
     background: var(--accent);
   }
-  .limit-bucket + .limit-bucket {
-    margin-top: 20px;
-  }
-  .limit-bucket > strong {
-    font-size: 12px;
-  }
+
   fieldset {
     border: 0;
     padding: 0;

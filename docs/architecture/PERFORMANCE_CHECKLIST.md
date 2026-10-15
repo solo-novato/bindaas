@@ -1,6 +1,6 @@
 # Resource profiling checklist
 
-Use the native app and Activity Monitor. Filter processes by `codex-workbench`, its WebView, and `codex app-server`. Record CPU and memory separately; shared WebView memory accounting varies by OS.
+Use the native app and Activity Monitor. Filter processes by `Bindaas` / `bindaas`, its WebView, and its agent processes. Record CPU and memory separately; shared WebView memory accounting varies by OS.
 
 1. Cold launch: verify no Codex or Git process is started by the empty screen. Record time to first usable window.
 2. Leave idle for 60 seconds: CPU should settle; there should be no repeating Git, directory-read, or model-list operations.
@@ -17,6 +17,6 @@ For local diagnostics launch with `VITE_DIAGNOSTICS=1 npm run desktop`, then exp
 
 ## Current evidence and limits
 
-The September 21 native process samples are in `ux/native-process-sample.json` and `ux/native-process-second-sample.json`. They cover two 60-second intervals of the open app, separating the native core and its owned child processes. They exclude OS-hosted WebKit processes where ownership could not be established; they are not a full application memory benchmark or proof of all checklist steps.
+Historical native process samples covered two 60-second intervals of the open app, separating the native core and its owned child processes. Those local artifacts are not included in the public repository. They excluded OS-hosted WebKit processes where ownership could not be established; they are not a full application memory benchmark or proof of all checklist steps.
 
-The opt-in `live_idle` Rust integration test in the README verifies production-manager idle shutdown, child reaping, and fresh connection startup against installed Codex, with an ephemeral read-only thread and no model turn. It passed with CLI 0.155.0. The regular fixture suite separately covers active-turn/approval protection and restart/resume. The full native UI workflow, editor/diff close-and-settle profile, and observed restored-workspace idle transition remain pending. macOS Accessibility automation currently reports disabled, so native interaction evidence must not be inferred from browser fixture results.
+The opt-in `live_idle` Rust integration test (`src-tauri/tests/live_idle.rs`) verifies production-manager idle shutdown, child reaping, and fresh connection startup against installed Codex, with an ephemeral read-only thread and no model turn. It passed with CLI 0.162.1 during the v0.3.0 release review (October 15, 2026), without sending a model turn. The installed-Codex `live_speed` check also confirmed Fast → Standard → Fast on that version without a model turn. The regular fixture suite separately covers active-turn/approval protection and restart/resume. The full native UI workflow, editor/diff close-and-settle profile, and observed restored-workspace idle transition remain pending. Native interaction evidence must be recorded separately from browser fixture results.

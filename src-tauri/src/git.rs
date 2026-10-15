@@ -3,6 +3,13 @@ use std::{path::Path, process::Stdio};
 use tokio::{io::AsyncReadExt, process::Command};
 pub const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 
+/// A bounded command read can end in the middle of a path or status record.
+fn complete_records(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    bytes
+        .split_inclusive(|b| *b == 0)
+        .filter_map(|row| row.strip_suffix(&[0]))
+}
+
 async fn run(root: &Path, args: &[&str]) -> Result<(Vec<u8>, bool), String> {
     let mut command = Command::new("git");
     crate::shell_env::apply(&mut command);
@@ -54,8 +61,7 @@ pub async fn list_files(root: &Path) -> Result<Vec<String>, String> {
     )
     .await?;
     let mut seen = std::collections::HashSet::new();
-    Ok(bytes
-        .split(|b| *b == 0)
+    Ok(complete_records(&bytes)
         .filter(|p| !p.is_empty())
         .map(|p| String::from_utf8_lossy(p).into_owned())
         .filter(|p| seen.insert(p.clone()))
@@ -70,7 +76,7 @@ pub struct GitFile {
     pub original_path: Option<String>,
 }
 pub fn parse_status(bytes: &[u8]) -> Vec<GitFile> {
-    let mut rows = bytes.split(|b| *b == 0);
+    let mut rows = complete_records(bytes);
     let mut files = Vec::new();
     while let Some(row) = rows.next() {
         let line = String::from_utf8_lossy(row);
@@ -79,8 +85,11 @@ pub fn parse_status(bytes: &[u8]) -> Vec<GitFile> {
             Some(b'2') => ("", 10),
             Some(b'u') => ("U", 11),
             Some(b'?') => {
+                let Some(path) = line.strip_prefix("? ").filter(|p| !p.is_empty()) else {
+                    continue;
+                };
                 files.push(GitFile {
-                    path: line[2..].into(),
+                    path: path.into(),
                     status: "??".into(),
                     original_path: None,
                 });
@@ -89,11 +98,14 @@ pub fn parse_status(bytes: &[u8]) -> Vec<GitFile> {
             _ => continue,
         };
         let parts: Vec<_> = line.splitn(count, ' ').collect();
-        if parts.len() != count {
+        if parts.len() != count || parts[count - 1].is_empty() {
             continue;
         }
         let original_path = if row[0] == b'2' {
-            rows.next().map(|v| String::from_utf8_lossy(v).to_string())
+            let Some(original) = rows.next().filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            Some(String::from_utf8_lossy(original).to_string())
         } else {
             None
         };
@@ -218,5 +230,24 @@ mod tests {
         assert_eq!(files[0].path, "file with\nnewline");
         let files = parse_status(b"2 R. N... 100644 100644 100644 a b R100 new name\0old name\0");
         assert_eq!(files[0].original_path.as_deref(), Some("old name"));
+    }
+
+    #[test]
+    fn truncated_or_malformed_records_never_become_file_paths() {
+        let data = b"? first.txt\0? second.txt\0";
+        for cut in 0..data.len() {
+            let files = parse_status(&data[..cut]);
+            assert!(files.iter().all(|file| file.path == "first.txt"));
+            assert_eq!(files.len(), usize::from(cut >= b"? first.txt\0".len()));
+        }
+        assert!(parse_status(b"?\0? \0?invalid\0").is_empty());
+        let rename = b"2 R. N... 100644 100644 100644 a b R100 new name\0old name\0";
+        for cut in 0..rename.len() {
+            assert!(parse_status(&rename[..cut]).is_empty());
+        }
+        assert_eq!(
+            complete_records(b"first.txt\0second").collect::<Vec<_>>(),
+            vec![b"first.txt".as_slice()]
+        );
     }
 }

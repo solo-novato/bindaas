@@ -51,7 +51,7 @@ Open a project folder to finish. You can re-run setup from **Settings → About 
 
 ## Updating
 
-Download the newer DMG and replace the app in Applications (then repeat the `xattr` step). Your settings are kept.
+Download the newer DMG and replace the app in Applications (then repeat the `xattr` step). Your settings, saved attachments, and local usage history are kept.
 
 ## Build from source instead
 
@@ -71,7 +71,7 @@ The DMG is written to `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/
 
 ## Uninstall
 
-Delete Bindaas from Applications. To remove its preferences and saved attachments too:
+Delete Bindaas from Applications. To remove its preferences, saved attachments, and local usage history too:
 
 ```sh
 rm -rf ~/Library/Application\ Support/dev.bindaas.desktop ~/Library/Caches/dev.bindaas.desktop ~/Library/WebKit/dev.bindaas.desktop

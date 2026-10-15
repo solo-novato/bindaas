@@ -7,7 +7,7 @@
 Recommended:
 
 ```text
-codex-workbench/
+bindaas/
 ├── AGENTS.md
 ├── README.md
 ├── package.json

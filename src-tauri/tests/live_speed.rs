@@ -24,7 +24,7 @@ async fn installed_codex_confirms_fast_and_standard_without_a_model_turn() {
         let v = c.request("thread/start", json!({"cwd":root.path(),"ephemeral":true,"sandbox":"read-only","approvalPolicy":"never"})).await?;
         let id = v["thread"]["id"].as_str().ok_or("Missing thread ID")?.to_owned();
         c.resumed.lock().await.insert(id.clone(),v);
-        for fast in [true,false] {
+        for fast in [true,false,true] {
             let targets = vec![Target { thread_id:id.clone(),turn_id:None }];
             let results = apply(c.clone(),root.path(),targets,fast).await?;
             let r = &results[0];
@@ -38,7 +38,7 @@ async fn installed_codex_confirms_fast_and_standard_without_a_model_turn() {
                 return Err(format!("Requested fast={fast}; Codex reported tier {}", r["settings"]["serviceTier"]));
             }
         }
-        println!("Installed Codex confirmed Fast, then cleared the tier. No model turn sent.");
+        println!("Installed Codex confirmed Fast, Standard, then Fast. No model turn sent.");
         Ok(())
     }.await;
     c.stop().await;

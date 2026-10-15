@@ -9,10 +9,11 @@ use std::{
 const READ_CAP: u64 = 32 * 1024 * 1024;
 
 pub fn config_dir() -> PathBuf {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
+    crate::shell_env::inherited_var("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".claude")
+            PathBuf::from(crate::shell_env::inherited_var("HOME").unwrap_or_default())
+                .join(".claude")
         })
 }
 pub fn valid_id(id: &str) -> bool {
@@ -53,10 +54,10 @@ fn matches_root(v: &Value, root: &Path) -> bool {
 }
 fn metadata(path: &Path, root: &Path) -> Option<Value> {
     let id = path.file_stem()?.to_str()?;
-    if !valid_id(id) || fs::symlink_metadata(path).ok()?.file_type().is_symlink() {
+    if !valid_id(id) || !fs::symlink_metadata(path).ok()?.is_file() {
         return None;
     }
-    let mut f = fs::File::open(path).ok()?;
+    let mut f = crate::files::open_regular(path).ok()?;
     let meta = f.metadata().ok()?;
     let mut head = vec![];
     Read::by_ref(&mut f)
@@ -66,7 +67,7 @@ fn metadata(path: &Path, root: &Path) -> Option<Value> {
     let mut tail = vec![];
     if meta.len() > 128 * 1024 {
         f.seek(SeekFrom::End(-(128 * 1024_i64))).ok()?;
-        f.read_to_end(&mut tail).ok()?;
+        f.take(128 * 1024).read_to_end(&mut tail).ok()?;
     }
     let mut rows: Vec<Value> = head
         .split(|b| *b == b'\n')
@@ -147,7 +148,7 @@ pub fn locate(config: &Path, root: &Path, id: &str) -> Result<PathBuf, String> {
 pub fn read(config: &Path, root: &Path, id: &str) -> Result<(Value, Vec<Value>), String> {
     let path = locate(config, root, id)?;
     let mut summary = metadata(&path, root).ok_or("Could not read Claude session")?;
-    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut file = crate::files::open_regular(&path).map_err(|e| e.to_string())?;
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     if length > READ_CAP {
         file.seek(SeekFrom::Start(length - READ_CAP))
@@ -228,6 +229,20 @@ pub fn read(config: &Path, root: &Path, id: &str) -> Result<(Value, Vec<Value>),
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn special_files_are_rejected_before_opening_native_history() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp
+            .path()
+            .join("11111111-1111-4111-8111-111111111111.jsonl");
+        let native_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: native_path is a valid NUL-terminated temporary path.
+        assert_eq!(unsafe { libc::mkfifo(native_path.as_ptr(), 0o600) }, 0);
+        assert!(metadata(&path, tmp.path()).is_none());
+    }
+
     #[test]
     fn rejects_paths_and_scopes_native_history() {
         assert!(!valid_id("../secret"));

@@ -64,6 +64,34 @@ async fn apply_one(c: &Client, root: &Path, target: &Target, fast: bool) -> Resu
     let future = c
         .update_settings(json!({"threadId":id,"serviceTier":tier}))
         .await;
+    // A no-op update has no notification. The start/resume response is still
+    // authoritative until a newer settings notification replaces it.
+    let reported = c.settings.lock().await.get(id).cloned();
+    let settings = match reported {
+        Some(settings) => settings,
+        None => c
+            .resumed
+            .lock()
+            .await
+            .get(id)
+            .filter(|response| response.get("serviceTier").is_some())
+            .map(super::thread_settings::resumed)
+            .unwrap_or(Value::Null),
+    };
+    let confirmed = settings.get("serviceTier").is_some_and(|reported| {
+        if fast {
+            matches!(reported.as_str(), Some("fast" | "priority"))
+        } else {
+            reported.is_null() || reported == "default"
+        }
+    });
+    let future = future.and_then(|()| {
+        if confirmed {
+            Ok(())
+        } else {
+            Err("Codex did not confirm the conversation's requested speed. Refresh its status before retrying.".into())
+        }
+    });
     let mut result = json!({"threadId":id,"turnId":target.turn_id,
         "future":if future.is_ok() {"saved"} else {"failed"},"active":"notTargeted"});
     if let Err(error) = future {
@@ -101,12 +129,6 @@ async fn apply_one(c: &Client, root: &Path, target: &Target, fast: bool) -> Resu
             }
         }
     }
-    result["settings"] = c
-        .settings
-        .lock()
-        .await
-        .get(id)
-        .cloned()
-        .unwrap_or(Value::Null);
+    result["settings"] = settings;
     Ok(result)
 }

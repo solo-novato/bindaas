@@ -163,6 +163,21 @@ test('launcher searches and opens files with the keyboard without crawling the p
   ).toBe(false);
 });
 
+test('file launcher settles when no project is open', async ({ page }) => {
+  await page.keyboard.press('Meta+p');
+  const launcher = page.getByRole('dialog', { name: 'Jump to anything' });
+  await launcher.getByRole('combobox').fill('missing-file');
+  await expect(launcher).toContainText('No match yet');
+  await expect(launcher.getByText('Searching project…')).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      (window as any).testCalls.some(
+        (call: any) => call.command === 'project_file_search',
+      ),
+    ),
+  ).toBe(false);
+});
+
 test('launcher restores focus, supports arrow selection, and isolates modal shortcuts', async ({
   page,
 }) => {

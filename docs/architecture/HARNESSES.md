@@ -73,4 +73,4 @@ CLAUDE_WORKBENCH_LIVE_TURN=1 cargo test --manifest-path src-tauri/Cargo.toml \
 
 Without that environment variable, the same ignored test checks native authentication and initialization without sending a model turn. Native histories from disposable smoke runs remain owned by Claude; tests do not delete user CLI history.
 
-Laptop UI verification with the browser protocol fixture: [dark theme](ux/agents-dark.png), [light theme](ux/agents-light.png).
+Browser protocol fixture coverage is in `tests/ui/harness.spec.ts`; run it in Chromium and WebKit. Generated screenshots and reports stay in the ignored `test-results/` directory.

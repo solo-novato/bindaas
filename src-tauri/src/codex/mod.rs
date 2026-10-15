@@ -29,6 +29,7 @@ pub type Sink = Arc<dyn Fn(&str, Value) + Send + Sync>;
 type Reply = oneshot::Sender<Result<Value, String>>;
 pub struct Client {
     pub generation: u64,
+    pub account_revision: AtomicU64,
     pub pid: u32,
     stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<u64, Reply>>,
@@ -77,6 +78,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         let client = Arc::new(Self {
             generation,
+            account_revision: AtomicU64::new(0),
             pid,
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
@@ -314,7 +316,7 @@ impl Client {
                 "turn/diff/updated"=>{let diff=p["diff"].as_str().unwrap_or("");self.emit("turn-diff",json!({"threadId":thread,"turnId":turn_id,"diff":prefix(diff,DIFF_CAP),"truncated":diff.len()>DIFF_CAP}));},
                 "serverRequest/resolved"=>{let id=p["requestId"].to_string();self.approvals.lock().await.remove(&id);let waiting=self.approvals.lock().await.values().any(|a|a.params["threadId"]==thread);self.emit("approval-resolved",json!({"requestId":id,"threadId":thread,"waiting":waiting}));},
                 "account/login/completed"=>{self.login.store(false,Ordering::SeqCst);self.emit("auth-updated",json!({"success":p["success"],"error":p["error"],"loginId":p["loginId"]}));},
-                "account/updated"=>self.emit("auth-updated",json!({"changed":true})),
+                "account/updated"=>{self.account_revision.fetch_add(1, Ordering::SeqCst);self.emit("auth-updated",json!({"changed":true}));},
                 "error"=>self.emit("warning",json!({"threadId":thread,"turnId":turn_id,"message":p["error"]["message"],"willRetry":p["willRetry"]})),
                 _=>{}
             }

@@ -24,6 +24,26 @@ const GENERATED: &[&str] = &[
     ".cache",
 ];
 
+/// Never let a named pipe or device block a file preview, including a file that
+/// is replaced between a metadata check and opening it.
+pub(crate) fn open_regular(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
 pub fn contained(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let path = Path::new(relative);
     if path.is_absolute()
@@ -48,13 +68,12 @@ pub struct Fingerprint {
     pub hash: String,
 }
 pub fn fingerprint(path: &Path) -> Result<Fingerprint, String> {
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+    let file = open_regular(path).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     // Huge files are metadata-only and can never be saved through this service.
     if metadata.len() <= TEXT_LIMIT {
-        let mut file = fs::File::open(path)
-            .map_err(|e| e.to_string())?
-            .take(TEXT_LIMIT + 1);
+        let mut file = file.take(TEXT_LIMIT + 1);
         let mut buffer = [0; 65536];
         loop {
             let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
@@ -97,7 +116,7 @@ pub fn read(root: &Path, relative: &str) -> Result<FileData, String> {
         (None, "unsupported")
     } else {
         let mut bytes = Vec::new();
-        fs::File::open(&path)
+        open_regular(&path)
             .map_err(|e| e.to_string())?
             .take(TEXT_LIMIT + 1)
             .read_to_end(&mut bytes)

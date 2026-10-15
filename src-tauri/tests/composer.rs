@@ -4,6 +4,27 @@ use bindaas::{
 };
 use serde_json::json;
 
+#[cfg(unix)]
+#[test]
+fn attachments_reject_named_pipes_without_waiting_for_a_writer() {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = Store::new(temp.path().join("attachments"));
+    let path = temp.path().join("pipe");
+    let native_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: native_path is a valid NUL-terminated temporary path.
+    assert_eq!(unsafe { libc::mkfifo(native_path.as_ptr(), 0o600) }, 0);
+    assert!(store.import_file(&path).is_err());
+
+    let entry = store.import_bytes("file.txt", b"snapshot", false).unwrap();
+    let snapshot = temp.path().join("attachments").join(&entry.id);
+    std::fs::remove_file(&snapshot).unwrap();
+    let native_path = CString::new(snapshot.as_os_str().as_bytes()).unwrap();
+    // SAFETY: native_path is a valid NUL-terminated temporary path.
+    assert_eq!(unsafe { libc::mkfifo(native_path.as_ptr(), 0o600) }, 0);
+    assert!(store.preview(&entry.id).is_err());
+}
+
 #[test]
 fn attachments_are_snapshots_and_images_use_native_input() {
     let temp = tempfile::tempdir().unwrap();

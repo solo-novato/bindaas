@@ -11,11 +11,13 @@ Bindaas is a calm, fast desktop app for working with coding agents on your Mac. 
 ## What you get
 
 - **Live agent activity** — streamed answers, commands, file edits, and plans as they happen, grouped so you can follow along without noise.
+- **Follow the trail** — switch from Transcript to Trail to see a request unfold through searches, file reads, edits, checks, and agent updates. Select a moment for its original evidence, jump straight to a failed action, or load saved activity from the beginning.
 - **Decisions where you type** — questions and approval requests dock right above the composer.
 - **Review before you trust** — a dedicated review view for every patch, with per-file review marks and one-click "Explain" or "Check regressions" follow-ups.
 - **Your project, not an IDE** — a lightweight explorer and editor: create, rename, trash, and edit files; Markdown preview; `@` mentions to point the agent at any file.
 - **Many tasks at once** — run conversations in parallel, even across projects (one window each), get notified when a background task finishes or needs you, and find anything later in History (`⌘K` searches it all).
 - **Plan or Code** — ask for a plan first, then turn it into an implementation.
+- **Account usage at a glance** — see remaining Codex limits, daily pacing, and forecasts based on your local usage history.
 - **Quiet by design** — no telemetry, no background indexing, and agents sleep when idle. An optional Power saving mode turns off every animation.
 
 | ![Questions dock above the composer](docs/images/question.jpg) | ![Review changes](docs/images/review.jpg)          |
@@ -82,6 +84,14 @@ Then open a project folder and describe a task.
 | `⌘S` / `⌘W` | Save / close a file tab             |
 | `⌘O`        | Open a project                      |
 
+## Account usage analysis
+
+The bottom bar shows remaining Codex limits. Open **Usage analysis** for daily pacing, recent usage estimates, and a forecast through the next reset. The green–amber–red bar reflects predicted headroom; its text explains the prediction without relying on color.
+
+Bindaas saves quota observations locally, separately for each account and plan, and imports matching history from the active Codex profile across projects. Older sessions without account IDs are used only when the profile's available account evidence agrees; the analysis explains when that attribution is used.
+
+Early forecasts use the current period's pace and are labeled **Provisional**. With enough history, forecasts learn your daily and weekday patterns. Missing data, resets, saturated counters, and ambiguous gaps are excluded. These are estimates of your account limit, not token counts or costs. No polling or additional network service is used.
+
 ## Permissions and safety
 
 Agents can read and change files and run commands on your Mac. Bindaas keeps you in charge:
@@ -93,7 +103,7 @@ Agents can read and change files and run commands on your Mac. Bindaas keeps you
 
 ## Privacy
 
-Bindaas sends **no telemetry** and makes no network requests of its own. Your conversations are stored by Codex and Claude Code, as usual. Bindaas keeps only its preferences and your message attachments (capped at 200 MiB) in:
+Bindaas sends **no telemetry** and makes no network requests of its own. Your conversations are stored by Codex and Claude Code, as usual. Bindaas keeps its preferences, locally saved quota observations, and your message attachments (capped at 200 MiB) in:
 
 ```text
 ~/Library/Application Support/dev.bindaas.desktop/

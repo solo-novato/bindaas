@@ -890,11 +890,18 @@ pub async fn codex_session_status(
 }
 #[tauri::command]
 pub async fn codex_account_status(s: State<'_, AppState>) -> Result<Value, String> {
+    let _history_guard = s.usage_history_lock.lock().await;
     let c = client(&s).await?;
+    let revision = c.account_revision.load(std::sync::atomic::Ordering::SeqCst);
     let (account, limits) = tokio::join!(
         c.request("account/read", json!({"refreshToken":false})),
         c.request("account/rateLimits/read", json!({}))
     );
+    if c.account_revision.load(std::sync::atomic::Ordering::SeqCst) != revision {
+        return Err(
+            "Account changed while reading usage. Refresh to read the current account.".into(),
+        );
+    }
     let (account, account_error) = match account {
         Ok(v) => (
             if v["account"].is_null() {
@@ -906,12 +913,37 @@ pub async fn codex_account_status(s: State<'_, AppState>) -> Result<Value, Strin
         ),
         Err(e) => (Value::Null, json!(e)),
     };
-    let (limits, limits_error) = match limits {
-        Ok(v) => (codex::session::limits(&v), Value::Null),
-        Err(e) => (Value::Null, json!(e)),
+    let (limits, limits_error, identity) = match limits {
+        Ok(v) => (
+            codex::session::limits(&v),
+            Value::Null,
+            v["accountId"].clone(),
+        ),
+        Err(e) => (Value::Null, json!(e), Value::Null),
+    };
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let path = s.settings_path.with_file_name("usage-history.json");
+    let mut a = account.clone();
+    if a.is_object() {
+        a["usageIdentity"] = identity;
+    }
+    let l = limits.clone();
+    let recorded = tokio::task::spawn_blocking(move || {
+        let home = crate::shell_env::codex_home();
+        crate::usage_history::record_with_history(&path, &a, &l, at, Some(&home))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let (history, history_error, history_import) = match recorded {
+        Ok((samples, imported)) => (json!(samples), Value::Null, json!(imported)),
+        Err(e) => (json!([]), json!(e), Value::Null),
     };
     Ok(
-        json!({"account":account,"limits":limits,"accountError":account_error,"limitsError":limits_error,"generation":c.generation}),
+        json!({"account":account,"limits":limits,"accountError":account_error,"limitsError":limits_error,
+        "generation":c.generation,"observedAt":at,"history":history,"historyError":history_error,"historyImport":history_import}),
     )
 }
 #[tauri::command]

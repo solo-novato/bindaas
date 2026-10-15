@@ -8,6 +8,7 @@
   } from '../reading';
   import { api } from '../api';
   import Icon from './Icon.svelte';
+  import AgentTrail from './AgentTrail.svelte';
   import { flight, pop, rise } from '../motion';
   import {
     duration,
@@ -33,6 +34,8 @@
     onplan,
     editableTurnId = null,
     onedit,
+    currentTurnId = null,
+    onhistory,
   }: {
     agentLabel?: string;
     items: TimelineItem[];
@@ -50,9 +53,15 @@
     onplan: (item: TimelineItem, implement: boolean) => void;
     editableTurnId?: string | null;
     onedit?: (item: TimelineItem) => void;
+    currentTurnId?: string | null;
+    onhistory: () => void;
   } = $props();
   const identity = untrack(() => viewKey);
   const initial = untrack(() => savedView);
+  let presentation = $state<'transcript' | 'trail'>(
+    initial?.presentation ?? 'transcript',
+  );
+  let trailOpened = $state(initial?.presentation === 'trail');
   let scroller: HTMLDivElement;
   let following = $state(initial?.following ?? true);
   let expanded = $state<string[]>(initial?.expanded ?? []);
@@ -95,11 +104,19 @@
     expectedScroll = scroller.scrollTop;
   }
   function remember() {
-    if (!scroller || loading || disposed || initializing) return;
+    if (
+      !scroller ||
+      loading ||
+      disposed ||
+      initializing ||
+      presentation === 'trail'
+    )
+      return;
     position = capturePosition(scroller, following);
     const remembered = query && beforeSearch ? beforeSearch : position;
     lastView = {
       ...remembered,
+      presentation,
       windowSize,
       expanded: [...expanded],
       expandedGroups: [...expandedGroups],
@@ -107,7 +124,7 @@
     onremember(identity, lastView);
   }
   function restorePosition() {
-    if (!scroller || loading || disposed) return;
+    if (!scroller || loading || disposed || presentation === 'trail') return;
     setTop(positionTop(scroller, { ...position, following }));
     if (following) remember();
     // Keep the anchor while Markdown loads; do not replace it with a clamped offset.
@@ -118,9 +135,23 @@
     remember();
   }
   export function focusReader() {
-    scroller?.focus({ preventScroll: true });
+    setPresentation('transcript');
+    tick().then(() => scroller?.focus({ preventScroll: true }));
+  }
+  function setPresentation(next: 'transcript' | 'trail') {
+    if (next === presentation) return;
+    if (presentation === 'transcript') remember();
+    if (next === 'trail') trailOpened = true;
+    presentation = next;
+    lastView = {
+      ...(lastView ?? { ...position, windowSize, expanded, expandedGroups }),
+      presentation,
+    };
+    onremember(identity, lastView);
+    if (next === 'transcript') tick().then(restorePosition);
   }
   export async function reveal(key: string) {
+    setPresentation('transcript');
     const index = items.findIndex((item) => itemKey(item) === key);
     if (index < 0) return;
     missingAnchor = false;
@@ -196,6 +227,7 @@
   );
   $effect.pre(() => {
     if (query !== previousQuery) {
+      if (query) setPresentation('transcript');
       if (!previousQuery && query)
         beforeSearch = scroller
           ? capturePosition(scroller, following)
@@ -273,7 +305,13 @@
     interrupted: 'Interrupted',
     recorded: '',
   };
-  function statusLabel(status?: string) {
+  function isRunning(item: TimelineItem) {
+    return item.status === 'inProgress' && item.turnId === runningTurnId;
+  }
+  function statusLabel(item: TimelineItem) {
+    const status = item.status;
+    if (status === 'inProgress' && !isRunning(item))
+      return 'Outcome unavailable';
     if (!status) return '';
     return (
       statusLabels[status] ??
@@ -286,7 +324,11 @@
     if (item.kind === 'command') return item.command;
     if (item.kind === 'fileChange') {
       const count = item.files?.length ?? 0;
-      const verb = item.status === 'inProgress' ? 'Editing' : 'Edited';
+      const verb = isRunning(item)
+        ? 'Editing'
+        : item.status === 'completed'
+          ? 'Edited'
+          : 'Changes to';
       return `${verb} ${count} ${count === 1 ? 'file' : 'files'}`;
     }
     return item.title;
@@ -344,319 +386,366 @@
   }
 </script>
 
-{#if query}<div class="conversation-navigation" aria-label="Search results">
-    <span>{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>
-    {#if matches.length}<span class="muted"
-        >{matchIndex + 1} of {matches.length}</span
-      ><button
-        aria-label="Previous match"
-        disabled={matchIndex === 0}
-        onclick={() => findMatch(matchIndex - 1)}>↑</button
-      ><button
-        aria-label="Next match"
-        disabled={matchIndex >= matches.length - 1}
-        onclick={() => findMatch(matchIndex + 1)}>↓</button
-      >{/if}
-  </div>{:else if prompts.length > 1}<div class="conversation-navigation">
-    <span class="muted">Conversation</span><select
-      aria-label="Jump to message"
-      value=""
-      onchange={(e) => {
-        if (e.currentTarget.value) reveal(e.currentTarget.value);
-        e.currentTarget.value = '';
-      }}
-      ><option value="" disabled>Jump to a request…</option
-      >{#each prompts as item, i}<option value={itemKey(item)}
-          >{i + 1} · {(item.text ?? 'Attached context').slice(0, 90)}</option
-        >{/each}</select
+<div class="conversation-view-controls">
+  <div class="segmented" role="group" aria-label="Conversation view">
+    <button
+      aria-pressed={presentation === 'transcript'}
+      onclick={() => setPresentation('transcript')}
+      ><Icon name="chat" size={14} />Transcript</button
     >
-  </div>{/if}
-<div class="timeline-stage">
-  {#if missingAnchor}<p class="reading-notice" role="status">
-      Your previous place is outside the loaded history. Showing the earliest
-      loaded activity.
-    </p>{/if}
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scrollable transcript needs keyboard focus for reading.) -->
-  <div
-    class="timeline"
-    role="region"
-    aria-label="Conversation transcript"
-    tabindex="0"
-    bind:this={scroller}
-    onscroll={() => {
-      if (scroller.scrollTop === expectedScroll) {
-        expectedScroll = null;
-        return;
-      }
-      expectedScroll = null;
-      following =
-        !query &&
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
-      remember();
-    }}
-  >
-    <div class="timeline-content" use:watchSize>
-      {#if items.length > windowSize}<button
-          class="load-older"
-          onclick={async () => {
-            pauseReading();
-            const oldHeight = scroller.scrollHeight;
-            const oldTop = scroller.scrollTop;
-            windowSize += 100;
-            await tick();
-            setTop(oldTop + scroller.scrollHeight - oldHeight);
-            remember();
-          }}>Show earlier activity ({items.length - windowSize})</button
-        >{/if}
-      {#each rows as row, index (row.key)}
-        {#if row.type === 'group'}
-          {@const latest = row.items[row.items.length - 1]}
-          {@const isOpen =
-            expandedGroups.includes(row.key) ||
-            row.items.some((i) => expanded.includes(itemKey(i)))}
-          <section
-            class="activity-group"
-            data-reading-key={row.key}
-            in:arrive|global={latest}
-          >
-            <button
-              class="activity-group-toggle"
-              aria-expanded={isOpen}
-              onclick={() => {
-                pauseReading();
-                if (isOpen) {
-                  expandedGroups = expandedGroups.filter((k) => k !== row.key);
-                  expanded = expanded.filter(
-                    (k) => !row.items.some((i) => itemKey(i) === k),
-                  );
-                } else expandedGroups = [...expandedGroups, row.key];
-              }}
-            >
-              <span class="activity-group-icon" aria-hidden="true"
-                ><Icon name="check" size={15} /></span
-              >
-              <span class="activity-group-copy">
-                <span class="activity-group-label"
-                  >{row.label}<span class="activity-group-status"
-                    >Completed</span
-                  ></span
-                >
-                <span class="activity-group-latest">
-                  <span class="activity-group-caption">Last:</span>
-                  <span class="activity-group-detail"
-                    >{latest.command ||
-                      latest.files?.map((file) => file.path).join(', ') ||
-                      latest.title ||
-                      'Recorded action'}</span
-                  >
-                  {#if latest.kind === 'command' && latest.exitCode != null}<span
-                      class="activity-group-result">Exit {latest.exitCode}</span
-                    >{/if}
-                </span>
-              </span>
-              <small>{isOpen ? 'Hide activity' : 'Show activity'}</small><span
-                aria-hidden="true">{isOpen ? '−' : '+'}</span
-              >
-            </button>
-            {#if isOpen}<div class="activity-group-items">
-                {#each row.items as item (itemKey(item))}{@render activity(
-                    item,
-                  )}{/each}
-              </div>{/if}
-          </section>
-        {:else}
-          {@const item = row.item}
-          {#if item.kind === 'message' || item.kind === 'user' || item.kind === 'plan'}<article
-              class="message"
-              in:arrive|global={item}
-              class:streaming={item.status === 'inProgress' &&
-                item.kind !== 'user'}
-              class:continued={continues(row, rows[index - 1])}
-              class:user={item.kind === 'user'}
-              class:proposed-plan={item.kind === 'plan'}
-              aria-label={item.kind === 'plan' ? 'Proposed plan' : undefined}
-              class:final-answer={item.phase === 'final_answer'}
-              data-reading-key={itemKey(item)}
-            >
-              <div class="message-avatar" aria-hidden="true">
-                {#if item.kind === 'user'}Y{:else}<Icon
-                    name={item.kind === 'plan' ? 'file' : 'workbench'}
-                    size={18}
-                  />{/if}
-              </div>
-              <div>
-                <div
-                  class="message-label"
-                  class:sr-label={item.kind === 'user' && !item.delivery}
-                >
-                  {item.kind === 'plan'
-                    ? 'Proposed plan'
-                    : item.phase === 'final_answer'
-                      ? 'Answer'
-                      : item.title}<span
-                    >{item.delivery === 'sending'
-                      ? `Sending to ${agentLabel}…`
-                      : item.delivery === 'accepted'
-                        ? 'Sent to running task · awaiting pickup'
-                        : item.status === 'inProgress'
-                          ? 'Streaming'
-                          : ''}</span
-                  >
-                </div>
-                {#if (item.kind === 'message' || item.kind === 'plan') && markdownModule}
-                  {#await markdownModule}<div class="message-text">
-                      {item.text}
-                    </div>{:then module}
-                    <module.default
-                      text={item.text ?? ''}
-                      path="__chat__.md"
-                      {projectRoot}
-                      {onopen}
-                    />
-                  {:catch}<div class="message-text">{item.text}</div>{/await}
-                {:else}<div class="message-text">{item.text}</div>{/if}
-                {#if item.status !== 'inProgress'}<div class="message-actions">
-                    <button
-                      class:just-copied={copied === `${item.turnId}:${item.id}`}
-                      aria-label={`Copy ${item.kind === 'user' ? 'your message' : item.kind === 'plan' ? 'plan' : `${agentLabel} response`}`}
-                      onclick={() => copyMessage(item)}
-                      >{copied === `${item.turnId}:${item.id}`
-                        ? 'Copied ✓'
-                        : 'Copy'}</button
-                    >
-                    {#if item.kind === 'message' || item.kind === 'plan'}<button
-                        onclick={() =>
-                          oncontext({
-                            id: crypto.randomUUID(),
-                            label:
-                              item.kind === 'plan'
-                                ? 'Proposed plan'
-                                : `${agentLabel} response`,
-                            text: item.text ?? '',
-                          })}>Quote in reply</button
-                      >{/if}
-                    {#if item.kind === 'user' && onedit && !item.delivery && item.turnId === editableTurnId}<button
-                        title="Remove this message and what followed, then edit and send it again"
-                        onclick={() => onedit(item)}>Rewrite</button
-                      >{/if}
-                  </div>{/if}
-                {#if item.kind === 'plan'}<div class="plan-actions">
-                    {#if itemKey(item) === planActionKey}
-                      <button onclick={() => onplan(item, false)}
-                        >Revise plan</button
-                      >
-                      <button class="primary" onclick={() => onplan(item, true)}
-                        >Prepare implementation</button
-                      >
-                      <p>
-                        Prepares a reply in Plan or Code mode. Review it before
-                        sending.
-                      </p>
-                    {:else if item.status === 'inProgress'}<p>
-                        {agentLabel} is drafting this plan…
-                      </p>
-                    {:else if item.truncated}<p>
-                        Plan preview is incomplete. Ask {agentLabel} for the full
-                        plan before implementing.
-                      </p>
-                    {:else}<p>
-                        Proposed plan from this conversation. Viewing it does
-                        not change the current mode.
-                      </p>{/if}
-                  </div>{/if}
-                {#if item.truncated}<small>Message truncated</small>{/if}
-              </div>
-            </article>
-          {:else if item.kind === 'planProgress'}<section
-              class="plan-progress"
-              in:arrive|global={item}
-              aria-label="Task progress"
-              data-reading-key={itemKey(item)}
-            >
-              <div class="plan-progress-heading">
-                <strong
-                  >{item.turnId === runningTurnId
-                    ? 'Task progress'
-                    : 'Last reported task progress'}</strong
-                ><span
-                  >{item.steps?.filter((step) => step.status === 'completed')
-                    .length ?? 0} of {item.steps?.length ?? 0} steps reported complete</span
-                >
-              </div>
-              {#if item.text}<p>{item.text}</p>{/if}
-              <ol>
-                {#each item.steps ?? [] as step}<li
-                    class:step-complete={step.status === 'completed'}
-                  >
-                    <span aria-hidden="true"
-                      >{step.status === 'completed'
-                        ? '✓'
-                        : step.status === 'inProgress'
-                          ? '●'
-                          : '○'}</span
-                    >
-                    <span>{step.step}</span><small
-                      >{step.status === 'inProgress'
-                        ? item.turnId === runningTurnId
-                          ? 'In progress'
-                          : 'Was in progress'
-                        : step.status === 'completed'
-                          ? 'Completed'
-                          : 'Pending'}</small
-                    >
-                  </li>{/each}
-              </ol>
-              {#if item.truncated}<small>Progress list shortened</small>{/if}
-            </section>
-          {:else if item.kind === 'thinking'}<section
-              class="thinking-summary"
-              in:arrive|global={item}
-              data-reading-key={itemKey(item)}
-              aria-label="Thinking summary"
-            >
-              <div class="thinking-summary-heading">
-                <span class:thinking-dot={item.status === 'inProgress'}
-                ></span>{item.status === 'inProgress'
-                  ? 'Thinking…'
-                  : 'Thinking summary'}
-              </div>
-              {#if item.text && markdownModule}{#await markdownModule}<p>
-                    {item.text}
-                  </p>{:then module}<module.default
-                    text={item.text}
-                    path="__thinking__.md"
-                    {projectRoot}
-                    {onopen}
-                  />{/await}
-              {:else}<p>{item.text}</p>{/if}
-            </section>
-          {:else}{@render activity(item)}{/if}
-        {/if}
-      {/each}
-      {#if query && !visible.length}<p class="timeline-empty">
-          No matching messages or activity.
-        </p>{/if}
-      {#if error}<p class="error">{error}</p>{/if}
-    </div>
+    <button
+      aria-pressed={presentation === 'trail'}
+      onclick={() => setPresentation('trail')}
+      ><Icon name="branch" size={14} />Trail</button
+    >
   </div>
-  {#if !following}<button
-      class="jump-latest"
-      in:pop
-      onclick={() => {
-        following = true;
-        setTop(scroller.scrollHeight);
+  <span
+    >{presentation === 'trail'
+      ? 'The route through your request'
+      : 'Messages and activity'}</span
+  >
+</div>
+{#if trailOpened}<div
+    class="conversation-view"
+    hidden={presentation !== 'trail'}
+  >
+    <AgentTrail
+      {items}
+      {currentTurnId}
+      {runningTurnId}
+      {projectRoot}
+      {onopen}
+      {onhistory}
+      onreveal={reveal}
+    />
+  </div>{/if}
+<div class="conversation-view" hidden={presentation !== 'transcript'}>
+  {#if query}<div class="conversation-navigation" aria-label="Search results">
+      <span>{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>
+      {#if matches.length}<span class="muted"
+          >{matchIndex + 1} of {matches.length}</span
+        ><button
+          aria-label="Previous match"
+          disabled={matchIndex === 0}
+          onclick={() => findMatch(matchIndex - 1)}>↑</button
+        ><button
+          aria-label="Next match"
+          disabled={matchIndex >= matches.length - 1}
+          onclick={() => findMatch(matchIndex + 1)}>↓</button
+        >{/if}
+    </div>{:else if prompts.length > 1}<div class="conversation-navigation">
+      <span class="muted">Conversation</span><select
+        aria-label="Jump to message"
+        value=""
+        onchange={(e) => {
+          if (e.currentTarget.value) reveal(e.currentTarget.value);
+          e.currentTarget.value = '';
+        }}
+        ><option value="" disabled>Jump to a request…</option
+        >{#each prompts as item, i}<option value={itemKey(item)}
+            >{i + 1} · {(item.text ?? 'Attached context').slice(0, 90)}</option
+          >{/each}</select
+      >
+    </div>{/if}
+  <div class="timeline-stage">
+    {#if missingAnchor}<p class="reading-notice" role="status">
+        Your previous place is outside the loaded history. Showing the earliest
+        loaded activity.
+      </p>{/if}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scrollable transcript needs keyboard focus for reading.) -->
+    <div
+      class="timeline"
+      role="region"
+      aria-label="Conversation transcript"
+      tabindex="0"
+      bind:this={scroller}
+      onscroll={() => {
+        if (scroller.scrollTop === expectedScroll) {
+          expectedScroll = null;
+          return;
+        }
+        expectedScroll = null;
+        following =
+          !query &&
+          scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+            80;
         remember();
       }}
-      >{#if unseen}<span class="new-count" aria-hidden="true">{unseen} new</span
-        >{/if}Jump to latest ↓</button
-    >{/if}
+    >
+      <div class="timeline-content" use:watchSize>
+        {#if items.length > windowSize}<button
+            class="load-older"
+            onclick={async () => {
+              pauseReading();
+              const oldHeight = scroller.scrollHeight;
+              const oldTop = scroller.scrollTop;
+              windowSize += 100;
+              await tick();
+              setTop(oldTop + scroller.scrollHeight - oldHeight);
+              remember();
+            }}>Show earlier activity ({items.length - windowSize})</button
+          >{/if}
+        {#each rows as row, index (row.key)}
+          {#if row.type === 'group'}
+            {@const latest = row.items[row.items.length - 1]}
+            {@const isOpen =
+              expandedGroups.includes(row.key) ||
+              row.items.some((i) => expanded.includes(itemKey(i)))}
+            <section
+              class="activity-group"
+              data-reading-key={row.key}
+              in:arrive|global={latest}
+            >
+              <button
+                class="activity-group-toggle"
+                aria-expanded={isOpen}
+                onclick={() => {
+                  pauseReading();
+                  if (isOpen) {
+                    expandedGroups = expandedGroups.filter(
+                      (k) => k !== row.key,
+                    );
+                    expanded = expanded.filter(
+                      (k) => !row.items.some((i) => itemKey(i) === k),
+                    );
+                  } else expandedGroups = [...expandedGroups, row.key];
+                }}
+              >
+                <span class="activity-group-icon" aria-hidden="true"
+                  ><Icon name="check" size={15} /></span
+                >
+                <span class="activity-group-copy">
+                  <span class="activity-group-label"
+                    >{row.label}<span class="activity-group-status"
+                      >Completed</span
+                    ></span
+                  >
+                  <span class="activity-group-latest">
+                    <span class="activity-group-caption">Last:</span>
+                    <span class="activity-group-detail"
+                      >{latest.command ||
+                        latest.files?.map((file) => file.path).join(', ') ||
+                        latest.title ||
+                        'Recorded action'}</span
+                    >
+                    {#if latest.kind === 'command' && latest.exitCode != null}<span
+                        class="activity-group-result"
+                        >Exit {latest.exitCode}</span
+                      >{/if}
+                  </span>
+                </span>
+                <small>{isOpen ? 'Hide activity' : 'Show activity'}</small><span
+                  aria-hidden="true">{isOpen ? '−' : '+'}</span
+                >
+              </button>
+              {#if isOpen}<div class="activity-group-items">
+                  {#each row.items as item (itemKey(item))}{@render activity(
+                      item,
+                    )}{/each}
+                </div>{/if}
+            </section>
+          {:else}
+            {@const item = row.item}
+            {#if item.kind === 'message' || item.kind === 'user' || item.kind === 'plan'}<article
+                class="message"
+                in:arrive|global={item}
+                class:streaming={isRunning(item) && item.kind !== 'user'}
+                class:continued={continues(row, rows[index - 1])}
+                class:user={item.kind === 'user'}
+                class:proposed-plan={item.kind === 'plan'}
+                aria-label={item.kind === 'plan' ? 'Proposed plan' : undefined}
+                class:final-answer={item.phase === 'final_answer'}
+                data-reading-key={itemKey(item)}
+              >
+                <div class="message-avatar" aria-hidden="true">
+                  {#if item.kind === 'user'}Y{:else}<Icon
+                      name={item.kind === 'plan' ? 'file' : 'workbench'}
+                      size={18}
+                    />{/if}
+                </div>
+                <div>
+                  <div
+                    class="message-label"
+                    class:sr-label={item.kind === 'user' && !item.delivery}
+                  >
+                    {item.kind === 'plan'
+                      ? 'Proposed plan'
+                      : item.phase === 'final_answer'
+                        ? 'Answer'
+                        : item.title}<span
+                      >{item.delivery === 'sending'
+                        ? `Sending to ${agentLabel}…`
+                        : item.delivery === 'accepted'
+                          ? 'Sent to running task · awaiting pickup'
+                          : item.status === 'inProgress'
+                            ? isRunning(item)
+                              ? 'Streaming'
+                              : 'Outcome unavailable'
+                            : ''}</span
+                    >
+                  </div>
+                  {#if (item.kind === 'message' || item.kind === 'plan') && markdownModule}
+                    {#await markdownModule}<div class="message-text">
+                        {item.text}
+                      </div>{:then module}
+                      <module.default
+                        text={item.text ?? ''}
+                        path="__chat__.md"
+                        {projectRoot}
+                        {onopen}
+                      />
+                    {:catch}<div class="message-text">{item.text}</div>{/await}
+                  {:else}<div class="message-text">{item.text}</div>{/if}
+                  {#if item.status !== 'inProgress' || (!isRunning(item) && !item.delivery)}<div
+                      class="message-actions"
+                    >
+                      <button
+                        class:just-copied={copied ===
+                          `${item.turnId}:${item.id}`}
+                        aria-label={`Copy ${item.kind === 'user' ? 'your message' : item.kind === 'plan' ? 'plan' : `${agentLabel} response`}`}
+                        onclick={() => copyMessage(item)}
+                        >{copied === `${item.turnId}:${item.id}`
+                          ? 'Copied ✓'
+                          : 'Copy'}</button
+                      >
+                      {#if item.kind === 'message' || item.kind === 'plan'}<button
+                          onclick={() =>
+                            oncontext({
+                              id: crypto.randomUUID(),
+                              label:
+                                item.kind === 'plan'
+                                  ? 'Proposed plan'
+                                  : `${agentLabel} response`,
+                              text: item.text ?? '',
+                            })}>Quote in reply</button
+                        >{/if}
+                      {#if item.kind === 'user' && onedit && !item.delivery && item.turnId === editableTurnId}<button
+                          title="Remove this message and what followed, then edit and send it again"
+                          onclick={() => onedit(item)}>Rewrite</button
+                        >{/if}
+                    </div>{/if}
+                  {#if item.kind === 'plan'}<div class="plan-actions">
+                      {#if itemKey(item) === planActionKey}
+                        <button onclick={() => onplan(item, false)}
+                          >Revise plan</button
+                        >
+                        <button
+                          class="primary"
+                          onclick={() => onplan(item, true)}
+                          >Prepare implementation</button
+                        >
+                        <p>
+                          Prepares a reply in Plan or Code mode. Review it
+                          before sending.
+                        </p>
+                      {:else if isRunning(item)}<p>
+                          {agentLabel} is drafting this plan…
+                        </p>
+                      {:else if item.truncated}<p>
+                          Plan preview is incomplete. Ask {agentLabel} for the full
+                          plan before implementing.
+                        </p>
+                      {:else}<p>
+                          Proposed plan from this conversation. Viewing it does
+                          not change the current mode.
+                        </p>{/if}
+                    </div>{/if}
+                  {#if item.truncated}<small>Message truncated</small>{/if}
+                </div>
+              </article>
+            {:else if item.kind === 'planProgress'}<section
+                class="plan-progress"
+                in:arrive|global={item}
+                aria-label="Task progress"
+                data-reading-key={itemKey(item)}
+              >
+                <div class="plan-progress-heading">
+                  <strong
+                    >{item.turnId === runningTurnId
+                      ? 'Task progress'
+                      : 'Last reported task progress'}</strong
+                  ><span
+                    >{item.steps?.filter((step) => step.status === 'completed')
+                      .length ?? 0} of {item.steps?.length ?? 0} steps reported complete</span
+                  >
+                </div>
+                {#if item.text}<p>{item.text}</p>{/if}
+                <ol>
+                  {#each item.steps ?? [] as step}<li
+                      class:step-complete={step.status === 'completed'}
+                    >
+                      <span aria-hidden="true"
+                        >{step.status === 'completed'
+                          ? '✓'
+                          : step.status === 'inProgress'
+                            ? '●'
+                            : '○'}</span
+                      >
+                      <span>{step.step}</span><small
+                        >{step.status === 'inProgress'
+                          ? item.turnId === runningTurnId
+                            ? 'In progress'
+                            : 'Was in progress'
+                          : step.status === 'completed'
+                            ? 'Completed'
+                            : 'Pending'}</small
+                      >
+                    </li>{/each}
+                </ol>
+                {#if item.truncated}<small>Progress list shortened</small>{/if}
+              </section>
+            {:else if item.kind === 'thinking'}<section
+                class="thinking-summary"
+                in:arrive|global={item}
+                data-reading-key={itemKey(item)}
+                aria-label="Thinking summary"
+              >
+                <div class="thinking-summary-heading">
+                  <span class:thinking-dot={isRunning(item)}></span>{isRunning(
+                    item,
+                  )
+                    ? 'Thinking…'
+                    : 'Thinking summary'}
+                </div>
+                {#if item.text && markdownModule}{#await markdownModule}<p>
+                      {item.text}
+                    </p>{:then module}<module.default
+                      text={item.text}
+                      path="__thinking__.md"
+                      {projectRoot}
+                      {onopen}
+                    />{/await}
+                {:else}<p>{item.text}</p>{/if}
+              </section>
+            {:else}{@render activity(item)}{/if}
+          {/if}
+        {/each}
+        {#if query && !visible.length}<p class="timeline-empty">
+            No matching messages or activity.
+          </p>{/if}
+        {#if error}<p class="error">{error}</p>{/if}
+      </div>
+    </div>
+    {#if !following}<button
+        class="jump-latest"
+        in:pop
+        onclick={() => {
+          following = true;
+          setTop(scroller.scrollHeight);
+          remember();
+        }}
+        >{#if unseen}<span class="new-count" aria-hidden="true"
+            >{unseen} new</span
+          >{/if}Jump to latest ↓</button
+      >{/if}
+  </div>
 </div>
 
 {#snippet activity(item: TimelineItem)}
   <div
     class="activity-row"
     in:arrive|global={item}
-    class:running={item.status === 'inProgress'}
+    class:running={isRunning(item)}
     data-reading-key={itemKey(item)}
     class:failed={item.status === 'failed' ||
       (item.exitCode != null && item.exitCode !== 0)}
@@ -672,18 +761,20 @@
       aria-expanded={expanded.includes(itemKey(item))}
     >
       <span class="activity-icon"
-        >{item.status === 'inProgress'
+        >{isRunning(item)
           ? '●'
           : (item.exitCode != null && item.exitCode !== 0) ||
               item.status === 'failed'
             ? '×'
-            : '✓'}</span
+            : item.status === 'completed'
+              ? '✓'
+              : '○'}</span
       ><span class="truncate" class:mono={item.kind === 'command'}
         >{activityTitle(item)}</span
       ><small
         >{item.kind === 'command' && item.exitCode != null
           ? `${item.exitCode === 0 ? 'exit 0' : `exit ${item.exitCode}`} · ${duration(item.durationMs)}`
-          : statusLabel(item.status)}</small
+          : statusLabel(item)}</small
       ><span class="activity-chevron" aria-hidden="true"
         ><Icon name="chevron-down" size={13} /></span
       >
@@ -694,7 +785,9 @@
         {#if item.output || item.kind === 'command'}<pre>{output[itemKey(item)]
               ?.text ??
               item.output ??
-              'Waiting for output…'}</pre>
+              (isRunning(item)
+                ? 'Waiting for output…'
+                : 'No output was recorded.')}</pre>
           {#if item.truncated}<p class="muted">
               Output preview truncated. Retained output is capped at 1 MiB per
               command.

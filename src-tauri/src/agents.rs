@@ -491,14 +491,18 @@ pub async fn agent_turn_items(
             .await
             .map(qualify);
     }
-    let (_, turns) = claude_history(&s, &window, &thread_id).await?;
+    let (summary, turns) = claude_history(&s, &window, &thread_id).await?;
     let items = turns
         .iter()
         .find(|t| t["id"] == turn_id)
         .and_then(|t| t["items"].as_array())
         .cloned()
         .unwrap_or_default();
-    page(items, cursor, 100)
+    let mut result = page(items, cursor, 100)?;
+    if summary["historyTruncated"] == true {
+        result["warning"] = json!("Showing the most recent 32 MiB of native history. Older messages remain available in Claude Code.");
+    }
+    Ok(result)
 }
 // Tauri commands receive each IPC argument as a parameter.
 #[allow(clippy::too_many_arguments)]

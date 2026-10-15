@@ -629,6 +629,7 @@ export async function mockDesktop(page: Page) {
                     },
             };
           case 'codex_account_status':
+            if (w.testAccountStatus) return w.testAccountStatus;
             return {
               generation,
               account: {
@@ -989,6 +990,114 @@ export async function concurrentFixture(page: Page) {
         return {};
       }
     };
+  });
+}
+
+export async function trailFixture(page: Page) {
+  await concurrentFixture(page);
+  await page
+    .getByRole('textbox', { name: 'Task prompt' })
+    .fill('Fix sign-in after session expiry');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.evaluate(() => {
+    const w = window as any;
+    const t = w.concurrentThreads['concurrent-1'];
+    const emit = (value: any) => {
+      const item = {
+        threadId: t.id,
+        turnId: t.turn.id,
+        status: 'completed',
+        ...value,
+      };
+      t.items.push(item);
+      w.testEmit('timeline-item', item);
+    };
+    w.testEmit('timeline-item', t.items[0]);
+    emit({
+      id: 'approach',
+      kind: 'message',
+      title: 'Codex',
+      phase: 'commentary',
+      text: 'I’ll trace the session refresh path and check how expired tokens are handled.',
+    });
+    emit({
+      id: 'search',
+      kind: 'command',
+      title: 'Command',
+      command: 'rg "refreshSession" src',
+      commandActions: [
+        { type: 'search', query: 'refreshSession', path: 'src' },
+      ],
+      output: 'src/main.ts:12: refreshSession()',
+      exitCode: 0,
+      durationMs: 160,
+    });
+    emit({
+      id: 'read-a',
+      kind: 'command',
+      title: 'Command',
+      command: 'cat src/main.ts',
+      commandActions: [{ type: 'read', path: 'src/main.ts' }],
+      output: 'export const refreshSession = () => session.refresh();',
+      exitCode: 0,
+    });
+    emit({
+      id: 'read-b',
+      kind: 'command',
+      title: 'Command',
+      command: 'cat README.md',
+      commandActions: [{ type: 'read', path: 'README.md' }],
+      output: '# Session lifecycle',
+      exitCode: 0,
+    });
+    emit({
+      id: 'edit-first',
+      kind: 'fileChange',
+      title: 'File changes',
+      files: [
+        {
+          path: 'src/main.ts',
+          diff: '@@ -1 +1 @@\n-checkExpiry(session);\n+await refreshSession(session);',
+        },
+      ],
+    });
+    emit({
+      id: 'check-failed',
+      kind: 'command',
+      title: 'Command',
+      command: 'npm test -- session.test.ts',
+      output:
+        'FAIL rejects an expired refresh token\nExpected: signed_out\nReceived: refreshing\n11 passed, 1 failed',
+      exitCode: 1,
+      durationMs: 1280,
+    });
+    emit({
+      id: 'revision',
+      kind: 'message',
+      title: 'Codex',
+      phase: 'commentary',
+      text: 'The failed test shows that an expired refresh token still enters the refresh path. I’ll add an expiry guard before attempting refresh.',
+    });
+    emit({
+      id: 'edit-guard',
+      kind: 'fileChange',
+      title: 'File changes',
+      files: [
+        {
+          path: 'src/main.ts',
+          diff: '@@ -1 +1,4 @@\n+if (refreshTokenExpired(session)) {\n+  return signedOut();\n+}\n await refreshSession(session);',
+        },
+      ],
+    });
+    emit({
+      id: 'check-final',
+      kind: 'command',
+      title: 'Command',
+      command: 'npm test -- session.test.ts',
+      status: 'inProgress',
+      output: 'Running session tests…',
+    });
+    w.trailEmit = emit;
   });
 }
 

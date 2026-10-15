@@ -100,6 +100,6 @@ By contributing, you agree that your contributions are licensed under the projec
 
 ## Releasing (maintainers)
 
-1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`; update `CHANGELOG.md`.
-2. Tag `vX.Y.Z` and push the tag. The **Release** workflow builds the Apple silicon DMG, attaches it with its SHA-256 checksum to a draft GitHub release, and you publish it after a quick smoke test.
+1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, including both lockfiles; update `CHANGELOG.md`. Run `node scripts/check-version.mjs` and `npm run notices`.
+2. Tag `vX.Y.Z` and push the tag. The **Release** workflow runs the full CI suite on that commit, checks every version against the tag, then builds the Apple silicon DMG and attaches it with its SHA-256 checksum to a draft GitHub release. Verify the checksum and smoke-test that DMG before publishing it.
 3. Releases are ad-hoc signed but not notarized; the install guide explains the one-time Gatekeeper step.

@@ -264,7 +264,7 @@ main.awaiting-answer > .composer-area {
   min-height: 160px;
 }
 
-main.awaiting-answer > .timeline-stage {
+main.awaiting-answer > .conversation-view {
   min-height: 40px;
   overflow: hidden;
 }
@@ -422,7 +422,7 @@ main > .composer-area .queued-composer-hidden {
   main.awaiting-answer:has(.compact-queued) > .approvals {
     min-height: 230px;
   }
-  main.awaiting-answer:has(.compact-queued) > .timeline-stage {
+  main.awaiting-answer:has(.compact-queued) > .conversation-view {
     min-height: 0;
   }
 }

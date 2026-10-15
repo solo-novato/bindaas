@@ -112,6 +112,16 @@ export type TimelineItem = {
   durationMs?: number;
   truncated?: boolean;
   detail?: string;
+  commandActions?:
+    | {
+        type: string;
+        path?: string | null;
+        name?: string | null;
+        query?: string | null;
+      }[]
+    | null;
+  parentToolId?: string | null;
+  toolInput?: { path?: string; query?: string; description?: string };
   files?: { path: string; kind?: { type: string }; diff?: string }[];
 };
 export type Approval = {
@@ -260,7 +270,25 @@ export type UsageWindow = {
   windowDurationMins: number | null;
   resetsAt: number | null;
 };
+export type UsageSample = {
+  at: number;
+  bucket: string;
+  minutes: number;
+  reset: number;
+  used: number;
+};
 export type AccountStatus = {
+  observedAt?: number;
+  history?: UsageSample[];
+  historyError?: string | null;
+  historyImport?: {
+    at: number;
+    files: number;
+    observations: number;
+    limited: boolean;
+    legacyFiles?: number;
+    unattributedFiles?: number;
+  } | null;
   account: { type: string; email?: string; planType?: string } | null;
   limits: {
     ordinaryUsageAllowed: boolean | null;

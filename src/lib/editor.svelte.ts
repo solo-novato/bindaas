@@ -11,6 +11,14 @@ export const editor = $state<{
 export const currentTab = () =>
   editor.tabs.find((t) => t.path === editor.active);
 let opening = 0;
+const saves = new WeakMap<Tab, Promise<boolean>>();
+export function resetEditor() {
+  opening++;
+  editor.tabs = [];
+  editor.active = '';
+  editor.loading = false;
+  editor.error = '';
+}
 export async function openFile(path: string) {
   const ticket = ++opening;
   editor.loading = true;
@@ -31,9 +39,13 @@ export async function openFile(path: string) {
     }
     if (!tab.data || tab.content === undefined) {
       const data = await api.read(path);
-      if (ticket !== opening) return;
-      tab.data = data;
-      tab.content = data.content == null ? undefined : editorText(data.content);
+      if (ticket !== opening || !editor.tabs.includes(tab)) return;
+      // The reader may finish after the user has started editing this buffer.
+      if (!tab.dirty) {
+        tab.data = data;
+        tab.content =
+          data.content == null ? undefined : editorText(data.content);
+      }
     }
     editor.active = path;
     // Clean inactive tabs keep metadata only. Dirty buffers remain intact.
@@ -44,7 +56,7 @@ export async function openFile(path: string) {
       }
     }
   } catch (e) {
-    editor.error = String(e);
+    if (ticket === opening) editor.error = String(e);
   } finally {
     if (ticket === opening) editor.loading = false;
   }
@@ -56,24 +68,27 @@ export function editContent(content: string) {
     tab.dirty = content !== editorText(tab.data?.content ?? '');
   }
 }
-export async function saveTab(tab = currentTab()): Promise<boolean> {
-  if (!tab?.data || tab.content === undefined) return false;
-  try {
-    const content = tab.content;
-    const data = await api.save(
-      tab.path,
-      tab.data.fingerprint,
-      diskText(content, tab.data.newline),
-    );
-    tab.data = data;
-    tab.dirty = tab.content !== content;
-    tab.conflict = undefined;
-    return true;
-  } catch (e) {
-    tab.conflict = String(e);
-    editor.error = String(e);
-    return false;
-  }
+export function saveTab(tab = currentTab()): Promise<boolean> {
+  if (!tab?.data || tab.content === undefined) return Promise.resolve(false);
+  const pending = saves.get(tab);
+  if (pending) return pending;
+  const content = tab.content;
+  const save = api
+    .save(tab.path, tab.data.fingerprint, diskText(content, tab.data.newline))
+    .then((data) => {
+      tab.data = data;
+      tab.dirty = tab.content !== content;
+      tab.conflict = undefined;
+      return true;
+    })
+    .catch((e) => {
+      tab.conflict = String(e);
+      if (editor.tabs.includes(tab)) editor.error = String(e);
+      return false;
+    })
+    .finally(() => saves.delete(tab));
+  saves.set(tab, save);
+  return save;
 }
 export async function closeTab(path: string): Promise<boolean> {
   const tab = editor.tabs.find((t) => t.path === path);
@@ -85,7 +100,14 @@ export async function closeTab(path: string): Promise<boolean> {
       ['Save', 'Don’t Save', 'Cancel'],
     );
     if (choice === 'Cancel') return false;
-    if (choice === 'Save' && !(await saveTab(tab))) return false;
+    if (choice === 'Save') {
+      if (!(await saveTab(tab))) return false;
+      if (tab.dirty) {
+        editor.error =
+          'New edits were made while saving. Save or discard them before closing.';
+        return false;
+      }
+    }
   }
   editor.tabs = editor.tabs.filter((t) => t !== tab);
   if (editor.active === path) {
@@ -106,16 +128,18 @@ export async function checkFiles() {
       if (!tab.data) return;
       try {
         const fingerprint = await api.stat(tab.path);
+        if (!editor.tabs.includes(tab)) return;
         if (
           fingerprint.hash !== tab.data.fingerprint.hash ||
           fingerprint.modifiedNanos !== tab.data.fingerprint.modifiedNanos
         ) {
           if (tab.dirty) {
             tab.conflict = 'File changed on disk while you have unsaved edits';
+          } else if (editor.active === tab.path) {
+            await reloadTab();
           } else {
             tab.content = undefined;
             tab.data = { ...tab.data, content: null, fingerprint };
-            if (editor.active === tab.path) await openFile(tab.path);
           }
         }
       } catch (e) {
@@ -136,8 +160,22 @@ export async function reloadTab() {
     )) !== 'Reload'
   )
     return;
-  tab.dirty = false;
-  tab.content = undefined;
-  tab.conflict = undefined;
-  await openFile(tab.path);
+  const content = tab.content;
+  editor.error = '';
+  try {
+    const data = await api.read(tab.path);
+    if (!editor.tabs.includes(tab)) return;
+    if (tab.content !== content) {
+      tab.conflict =
+        'New edits were made while reloading. Your edits were kept.';
+      return;
+    }
+    // Keep the original buffer intact until a replacement has actually arrived.
+    tab.data = data;
+    tab.content = data.content == null ? undefined : editorText(data.content);
+    tab.dirty = false;
+    tab.conflict = undefined;
+  } catch (e) {
+    if (editor.tabs.includes(tab)) editor.error = String(e);
+  }
 }

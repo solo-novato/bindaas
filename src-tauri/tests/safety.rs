@@ -2,6 +2,21 @@ use bindaas::{files, git, settings};
 use serde_json::Value;
 use std::process::Command;
 
+#[cfg(unix)]
+#[test]
+fn fingerprint_rejects_special_files_without_waiting_for_a_writer() {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pipe");
+    let native_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: native_path is a valid NUL-terminated temporary path.
+    assert_eq!(unsafe { libc::mkfifo(native_path.as_ptr(), 0o600) }, 0);
+    assert!(files::fingerprint(&path)
+        .unwrap_err()
+        .contains("regular file"));
+    assert!(files::fingerprint(directory.path()).is_err());
+}
+
 #[test]
 fn fingerprint_survives_json_ipc_and_preserves_permissions() {
     let directory = tempfile::tempdir().unwrap();

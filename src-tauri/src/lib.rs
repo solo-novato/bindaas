@@ -8,6 +8,7 @@ pub mod git;
 pub mod notifications;
 pub mod settings;
 pub mod shell_env;
+pub mod usage_history;
 pub mod windows;
 use std::{
     path::PathBuf,
@@ -25,6 +26,7 @@ pub struct AppState {
     pub windows: Arc<windows::Windows>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: PathBuf,
+    pub usage_history_lock: Mutex<()>,
     pub agents: agents::Registry,
     pub operations: Mutex<()>,
     pub quit_confirmed: AtomicBool,
@@ -87,6 +89,7 @@ pub fn run() {
                 windows: registry.clone(),
                 settings: Mutex::new(settings),
                 settings_path: path,
+                usage_history_lock: Mutex::new(()),
                 agents: agents::Registry {
                     codex: manager,
                     claude: Mutex::new(claude_manager),

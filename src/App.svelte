@@ -24,6 +24,7 @@
     saveTab,
     closeTab,
     protectDirty,
+    resetEditor,
     checkFiles,
     currentTab,
   } from './lib/editor.svelte';
@@ -93,6 +94,7 @@
   import WelcomeScreen from './lib/components/WelcomeScreen.svelte';
   import InspectorPane from './lib/components/InspectorPane.svelte';
   import QueueCard from './lib/components/QueueCard.svelte';
+  import UsageBar from './lib/components/UsageBar.svelte';
   import ComposerControls from './lib/components/ComposerControls.svelte';
   import {
     buildLaunchEntries,
@@ -140,7 +142,7 @@
   let attaching = $state(false);
   let mode = $state<CollaborationMode | null>(null);
   let settingsBusy = $state(false);
-  let sessionPanel = $state<'status' | 'permissions' | null>(null);
+  let sessionPanel = $state<'status' | 'permissions' | 'usage' | null>(null);
   let permissionDraft = $state<PermissionDraft>({
     permissions: ':workspace',
     approvalPolicy: 'on-request',
@@ -1089,8 +1091,7 @@
       touched = [];
       selectedPath = '';
       baseline = [];
-      editor.tabs = [];
-      editor.active = '';
+      resetEditor();
       discovered = [];
       treeVersion++;
       view = 'Chat';
@@ -2628,6 +2629,8 @@
               oncontext={addContext}
               onopen={open}
               runningTurnId={active ? turn?.id : null}
+              currentTurnId={turn?.id}
+              onhistory={() => run(() => navigate('Runs'))}
               planActionKey={planActionsEnabled && latestPlan
                 ? itemKey(latestPlan)
                 : null}
@@ -3144,6 +3147,11 @@
         onrefresh={() => run(refreshGit)}
       />{/if}
   </div>
+  <UsageBar
+    connection={connections.codex}
+    visible={!!project && selectedHarness === 'codex'}
+    onoverview={() => (sessionPanel = 'usage')}
+  />
 </div>
 
 {#snippet explorerToggle()}{#if !leftOpen && !focusMode && view !== 'Changes' && view !== 'Runs' && view !== 'Settings'}<button
@@ -3337,7 +3345,8 @@
   {#key threadId ?? `${project.root}:${selectedHarness}`}<SessionPanel
       harness={selectedHarness}
       running={active}
-      initialTab={sessionPanel}
+      initialTab={sessionPanel === 'usage' ? 'status' : sessionPanel}
+      focusUsage={sessionPanel === 'usage'}
       {threadId}
       root={project.root}
       branch={git?.branch ?? null}

@@ -68,6 +68,21 @@ fn live_settings_are_whitelisted_and_keep_unknowns_null() {
 }
 
 #[test]
+fn unknown_service_tiers_are_distinct_from_explicit_standard_settings() {
+    for normalize in [thread_settings::live, thread_settings::resumed] {
+        assert!(normalize(&json!({})).get("serviceTier").is_none());
+        assert_eq!(
+            normalize(&json!({"serviceTier":null})).get("serviceTier"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            normalize(&json!({"serviceTier":"default"}))["serviceTier"],
+            "default"
+        );
+    }
+}
+
+#[test]
 fn restored_usage_and_limits_are_bounded_whitelisted_and_unknown_safe() {
     use bindaas::codex::session;
     let (_file, thread) = fixture(vec![

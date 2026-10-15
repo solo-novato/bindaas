@@ -25,14 +25,18 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       settings: {
         model: 'fixture',
         effort: 'high',
-        serviceTier: null,
+        serviceTier: p.initialTier ?? null,
         collaborationMode: { mode: 'plan' },
         approvalPolicy: 'on-request',
         sandboxPolicy: { type: 'readOnly' },
         cwd: p.cwd,
       },
     });
-    return reply({ thread, model: 'fixture' });
+    return reply({
+      thread,
+      model: 'fixture',
+      serviceTier: p.omitTier ? undefined : (p.initialTier ?? null),
+    });
   }
   if (method === 'thread/read')
     return reply({ thread: t.thread, requests, settings: t.settings });
@@ -47,7 +51,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (method === 'thread/settings/update') {
     if (t.options.failFuture) return reject('Future speed rejected');
+    if (t.options.noNotification) return reply({});
     t.settings.serviceTier = p.serviceTier === 'fast' ? 'priority' : 'default';
+    if (t.options.reportWrongTier) t.settings.serviceTier = null;
+    if (t.options.omitNotificationTier) delete t.settings.serviceTier;
     emit({
       method: 'thread/settings/updated',
       params: { threadId: t.thread.id, threadSettings: t.settings },

@@ -67,7 +67,7 @@ impl Store {
     }
 
     pub fn import_file(&mut self, path: &Path) -> Result<Attachment, String> {
-        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let file = crate::files::open_regular(path).map_err(|e| e.to_string())?;
         let meta = file.metadata().map_err(|e| e.to_string())?;
         if !meta.is_file() || meta.len() > MAX_BYTES as u64 {
             return Err("Choose a regular file no larger than 20 MiB".into());
@@ -163,7 +163,7 @@ impl Store {
             .entries
             .get(id)
             .ok_or("Attachment expired. Attach the file again.")?;
-        let file = fs::File::open(self.root.join(id))
+        let file = crate::files::open_regular(&self.root.join(id))
             .map_err(|_| "Attachment missing. Attach the file again.")?;
         let meta = file.metadata().map_err(|e| e.to_string())?;
         if !meta.is_file() || meta.len() != entry.size_bytes as u64 {
